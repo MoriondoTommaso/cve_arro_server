@@ -3,9 +3,9 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "arrospace-server"
+name = "arro-server"
 version = "0.1.0"
-description = "FastAPI server for serving Zarr v3 datasets with ArrowSpace metadata"
+description = "FastAPI server for serving Zarr v3 datasets with ArrowSpace graph-Laplacian index"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
@@ -21,7 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 zarr = ["zarr>=3.0", "fsspec>=2024.2"]
 arrow = ["pyarrow>=15.0"]
-arrowspace = ["pyarrowspace"]
+# pip install arrowspace  (repo: https://github.com/tuned-org-uk/pyarrowspace)
+arrowspace = ["arrowspace"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -33,7 +34,7 @@ dev = [
 ]
 
 [project.scripts]
-arrospace-server = "arrospace_server.__main__:main"
+arro-server = "arrospace_server.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/arrospace_server"]
