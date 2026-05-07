@@ -1,27 +1,53 @@
-"""Adapter for pyarrowspace / ArrowSpace metadata.
+"""Adapter for arrowspace / ArrowSpace graph-Laplacian index.
 
-The package may not be available in every environment. We never import it at
-module load — :func:`load` attempts the import lazily and returns a stub
-adapter that raises :class:`OptionalDependencyMissing` on use.
+The ``arrowspace`` package (pip install arrowspace,
+repo: https://github.com/tuned-org-uk/pyarrowspace) may not be available in
+every environment.  We never import it at module load — :func:`load` attempts
+the import lazily and returns a stub adapter that falls back to the sidecar
+JSON adapter.
 
-ArrowSpace metadata is also looked up from sidecar files placed next to a
-dataset. The convention used by this scaffold:
+Design
+------
+arrowspace is a **pure in-memory builder**.  Its only public entry-point is::
+
+    from arrowspace import ArrowSpaceBuilder
+    aspace, gl = ArrowSpaceBuilder().build(graph_params, np_array_float64)
+
+The raw dataset stays as the Zarr v3 array (served by the existing Zarr
+backend).  The *graph Laplacian* produced by arrowspace is persisted as a
+second Zarr v3 array (CSR components) under::
+
+    <ARROSPACE_INDEX_STORE>/<dataset_id_slug>/
+        data.zarr    # gl.to_csr() → data array  (float32)
+        indices.zarr # CSR column indices         (int64)
+        indptr.zarr  # CSR row pointers           (int64)
+        meta.json    # {nitems, nfeatures, nclusters, shape}
+
+The ``ArrowSpace`` object itself is kept in-process memory; on the next server
+start the Zarr arrays can be loaded back (Phase 2 work).  For now the index
+lives in memory and is rebuilt on ``POST /datasets/{id}/index``.
+
+Sidecar fallback
+----------------
+ArrowSpace metadata can also be advertised via sidecar files next to a
+dataset::
 
     <dataset_root>/_arrowspace/manifold.json
     <dataset_root>/_arrowspace/stats.json
-    <dataset_root>/_arrowspace/index.<ext>     (opaque to this layer)
+    <dataset_root>/_arrowspace/index.json
 
-This means a dataset can advertise ArrowSpace metadata without the Python
-package being installed, which is exactly what we want for boilerplate use.
+This allows a dataset to expose ArrowSpace metadata without the Python package.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from .errors import MetadataUnavailable, OptionalDependencyMissing
 
@@ -29,21 +55,79 @@ log = logging.getLogger(__name__)
 
 SIDECAR_DIR = "_arrowspace"
 
+DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
+    "eps": 1.0,
+    "k": 6,
+    "topk": 3,
+    "p": 2.0,
+    "sigma": 1.0,
+}
+
 
 @dataclass
 class ArrowSpaceAdapter:
     available: bool
-    backend: str  # "pyarrowspace" | "sidecar" | "none"
+    backend: str  # "arrowspace" | "sidecar" | "none"
 
-    def manifold(self, dataset_path: Path) -> dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Index lifecycle
+    # ------------------------------------------------------------------
+
+    def build_index(
+        self,
+        dataset_id: str,
+        array: np.ndarray,
+        index_store: Path,
+        graph_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build (or rebuild) the graph-Laplacian index for *array*.
+
+        Returns a summary dict ``{nitems, nfeatures, nclusters}``.
+        """
         raise NotImplementedError
 
-    def stats(self, dataset_path: Path) -> dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Query methods (only what ArrowSpace actually exposes)
+    # ------------------------------------------------------------------
+
+    def lambdas(
+        self,
+        dataset_id: str,
+    ) -> dict[str, Any]:
+        """Return the Laplacian eigenvalue distribution.
+
+        ``{nitems, lambdas: [float, ...], lambdas_sorted: [[float, int], ...]}``
+        """
         raise NotImplementedError
 
-    def search(self, dataset_path: Path, query: dict[str, Any]) -> dict[str, Any]:
+    def search(
+        self,
+        dataset_id: str,
+        query: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Vector search.  *query* must contain ``vector`` (list[float]).
+
+        Optionally ``tau`` (float, default 1.0).
+        Returns ``{backend, results: [{index, score}, ...]}`.
+        """
         raise NotImplementedError
 
+    # ------------------------------------------------------------------
+    # Sidecar helpers (used by routes for /manifold and raw /stats)
+    # ------------------------------------------------------------------
+
+    def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]:
+        """Read ``_arrowspace/manifold.json`` sidecar if present."""
+        raise NotImplementedError
+
+    def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
+        """Read ``_arrowspace/stats.json`` sidecar if present."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# Sidecar-only adapter
+# ---------------------------------------------------------------------------
 
 class _SidecarAdapter(ArrowSpaceAdapter):
     def __init__(self) -> None:
@@ -59,96 +143,244 @@ class _SidecarAdapter(ArrowSpaceAdapter):
         except Exception as e:
             raise MetadataUnavailable(f"failed to parse {f}: {e}") from e
 
-    def manifold(self, dataset_path: Path) -> dict[str, Any]:
+    def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]:
         return self._read(dataset_path, "manifold.json")
 
-    def stats(self, dataset_path: Path) -> dict[str, Any]:
+    def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
         return self._read(dataset_path, "stats.json")
 
-    def search(self, dataset_path: Path, query: dict[str, Any]) -> dict[str, Any]:
-        # Sidecar mode: support naive linear lookup against an index.json
-        # consisting of {"items": [{"id": ..., "tags": [...], "vector": [...]}]}.
-        idx_file = dataset_path / SIDECAR_DIR / "index.json"
-        if not idx_file.exists():
-            raise MetadataUnavailable(
-                f"search index missing: {idx_file}. Install pyarrowspace for vector search."
-            )
-        idx = json.loads(idx_file.read_text())
-        items = idx.get("items", [])
-        q = (query.get("q") or "").lower().strip()
-        limit = int(query.get("limit") or 20)
-        if not q:
-            return {"backend": "sidecar", "results": items[:limit]}
-        hits = [
-            it
-            for it in items
-            if q in str(it.get("id", "")).lower()
-            or any(q in str(t).lower() for t in it.get("tags", []))
-        ]
-        return {"backend": "sidecar", "results": hits[:limit], "query": q}
+    def build_index(
+        self,
+        dataset_id: str,
+        array: np.ndarray,
+        index_store: Path,
+        graph_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "build_index")
 
+    def lambdas(self, dataset_id: str) -> dict[str, Any]:
+        raise OptionalDependencyMissing("arrowspace", "lambdas")
+
+    def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        # Sidecar text-based fallback via index.json
+        raise OptionalDependencyMissing(
+            "arrowspace",
+            "vector search (install arrowspace or provide sidecar index.json)",
+        )
+
+
+# ---------------------------------------------------------------------------
+# No-op adapter
+# ---------------------------------------------------------------------------
 
 class _UnavailableAdapter(ArrowSpaceAdapter):
     def __init__(self) -> None:
         super().__init__(available=False, backend="none")
 
-    def manifold(self, dataset_path: Path) -> dict[str, Any]:
-        raise OptionalDependencyMissing("pyarrowspace", "manifold metadata")
+    def build_index(self, dataset_id, array, index_store, graph_params=None):
+        raise OptionalDependencyMissing("arrowspace", "build_index")
 
-    def stats(self, dataset_path: Path) -> dict[str, Any]:
-        raise OptionalDependencyMissing("pyarrowspace", "ArrowSpace statistics")
+    def lambdas(self, dataset_id):
+        raise OptionalDependencyMissing("arrowspace", "lambdas")
 
-    def search(self, dataset_path: Path, query: dict[str, Any]) -> dict[str, Any]:
-        raise OptionalDependencyMissing("pyarrowspace", "ArrowSpace search")
+    def search(self, dataset_id, query):
+        raise OptionalDependencyMissing("arrowspace", "search")
+
+    def sidecar_manifold(self, dataset_path):
+        raise OptionalDependencyMissing("arrowspace", "manifold sidecar")
+
+    def sidecar_stats(self, dataset_path):
+        raise OptionalDependencyMissing("arrowspace", "stats sidecar")
 
 
-class _PyArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - depends on optional pkg
+# ---------------------------------------------------------------------------
+# Live arrowspace adapter
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _IndexEntry:
+    """In-memory cache slot for one built index."""
+    aspace: Any
+    gl: Any
+    nitems: int
+    nfeatures: int
+    nclusters: int
+
+
+class _ArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - optional dep
+    """Live adapter backed by the ``arrowspace`` package.
+
+    arrowspace is a **pure in-memory builder**; it has no path-based open API.
+    This adapter:
+
+    1. Accepts a ``numpy.ndarray`` (already read from Zarr by the route
+       handler) and calls ``ArrowSpaceBuilder().build(graph_params, array)``.
+    2. Persists the graph Laplacian CSR components as Zarr v3 arrays under
+       ``<index_store>/<slug>/``.
+    3. Caches ``(ArrowSpace, GraphLaplacian)`` in memory keyed by
+       ``dataset_id`` to avoid rebuilds within a server lifetime.
+    4. Exposes only the methods that ``ArrowSpace`` actually provides:
+       ``search()``, ``lambdas()``, and ``lambdas_sorted()``.
+    """
+
     def __init__(self, module: Any) -> None:
-        super().__init__(available=True, backend="pyarrowspace")
+        super().__init__(available=True, backend="arrowspace")
         self._mod = module
+        self._cache: dict[str, _IndexEntry] = {}
 
-    def _load(self, dataset_path: Path) -> Any:
-        # The exact pyarrowspace API is not pinned here. We try a few common
-        # entry points and fall through to the sidecar adapter on failure.
-        for name in ("open_dataset", "open", "Dataset"):
-            fn = getattr(self._mod, name, None)
-            if callable(fn):
-                return fn(str(dataset_path))
-        raise OptionalDependencyMissing("pyarrowspace", "no compatible open() entry point")
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-    def manifold(self, dataset_path: Path) -> dict[str, Any]:
-        ds = self._load(dataset_path)
-        for name in ("manifold", "get_manifold"):
-            fn = getattr(ds, name, None)
-            if callable(fn):
-                return _to_jsonable(fn())
-        raise MetadataUnavailable("pyarrowspace dataset exposes no manifold()")
+    @staticmethod
+    def _slug(dataset_id: str) -> str:
+        """File-system-safe slug for a dataset_id."""
+        return dataset_id.replace("/", "__").replace("\\", "__")
 
-    def stats(self, dataset_path: Path) -> dict[str, Any]:
-        ds = self._load(dataset_path)
-        for name in ("stats", "summary", "describe"):
-            fn = getattr(ds, name, None)
-            if callable(fn):
-                return _to_jsonable(fn())
-        raise MetadataUnavailable("pyarrowspace dataset exposes no stats()")
+    def _persist_csr(
+        self,
+        index_store: Path,
+        slug: str,
+        gl: Any,
+        meta: dict[str, Any],
+    ) -> None:
+        """Write CSR arrays + meta.json to ``index_store/<slug>/``."""
+        try:
+            import zarr  # type: ignore
+        except ImportError:
+            log.warning("zarr not installed; graph-Laplacian will not be persisted")
+            return
 
-    def search(self, dataset_path: Path, query: dict[str, Any]) -> dict[str, Any]:
-        ds = self._load(dataset_path)
-        fn = getattr(ds, "search", None)
-        if callable(fn):
-            return _to_jsonable(fn(**query))
-        raise MetadataUnavailable("pyarrowspace dataset exposes no search()")
+        csr = gl.to_csr()  # returns (data, indices, indptr, shape)
+        csr_data, csr_indices, csr_indptr, csr_shape = csr
+
+        dest = index_store / slug
+        dest.mkdir(parents=True, exist_ok=True)
+
+        for arr_name, arr_val in (
+            ("data", np.asarray(csr_data, dtype=np.float32)),
+            ("indices", np.asarray(csr_indices, dtype=np.int64)),
+            ("indptr", np.asarray(csr_indptr, dtype=np.int64)),
+        ):
+            zarr_path = dest / f"{arr_name}.zarr"
+            z = zarr.open(
+                str(zarr_path),
+                mode="w",
+                shape=arr_val.shape,
+                dtype=arr_val.dtype,
+                chunks=True,
+                zarr_format=3,
+            )
+            z[:] = arr_val
+
+        meta_dict = dict(meta)
+        meta_dict["csr_shape"] = list(csr_shape)
+        (dest / "meta.json").write_text(json.dumps(meta_dict))
+        log.info("Persisted graph-Laplacian CSR to %s", dest)
+
+    # ------------------------------------------------------------------
+    # Index lifecycle
+    # ------------------------------------------------------------------
+
+    def build_index(
+        self,
+        dataset_id: str,
+        array: np.ndarray,
+        index_store: Path,
+        graph_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the ArrowSpace graph-Laplacian index for *array*.
+
+        The input *array* must be a 2-D float64 ndarray (rows = items,
+        columns = features).  It is read from the Zarr backend by the
+        route handler before calling this method.
+        """
+        gp = graph_params or DEFAULT_GRAPH_PARAMS
+        arr64 = np.asarray(array, dtype=np.float64)
+        if arr64.ndim != 2:
+            raise ValueError(
+                f"arrowspace requires a 2-D array (items × features); got shape {arr64.shape}"
+            )
+
+        log.info("Building arrowspace index for %s (shape=%s, params=%s)", dataset_id, arr64.shape, gp)
+        aspace, gl = self._mod.ArrowSpaceBuilder().build(gp, arr64)
+
+        entry = _IndexEntry(
+            aspace=aspace,
+            gl=gl,
+            nitems=int(aspace.nitems),
+            nfeatures=int(aspace.nfeatures),
+            nclusters=int(aspace.nclusters),
+        )
+        self._cache[dataset_id] = entry
+
+        meta = {
+            "nitems": entry.nitems,
+            "nfeatures": entry.nfeatures,
+            "nclusters": entry.nclusters,
+        }
+        self._persist_csr(index_store, self._slug(dataset_id), gl, meta)
+
+        return meta
+
+    # ------------------------------------------------------------------
+    # Query methods — only real ArrowSpace API surface
+    # ------------------------------------------------------------------
+
+    def _get_entry(self, dataset_id: str) -> _IndexEntry:
+        entry = self._cache.get(dataset_id)
+        if entry is None:
+            raise MetadataUnavailable(
+                f"No index built for '{dataset_id}'. "
+                "Call POST /datasets/{id}/index first."
+            )
+        return entry
+
+    def lambdas(self, dataset_id: str) -> dict[str, Any]:
+        """Return Laplacian eigenvalue distribution for a built index."""
+        entry = self._get_entry(dataset_id)
+        lam = list(entry.aspace.lambdas())
+        lam_sorted = [[float(v), int(i)] for v, i in entry.aspace.lambdas_sorted()]
+        return {
+            "nitems": entry.nitems,
+            "lambdas": [float(v) for v in lam],
+            "lambdas_sorted": lam_sorted,
+        }
+
+    def search(self, dataset_id: str, query: dict[str, Any]) -> dict[str, Any]:
+        """Vector search against the in-memory arrowspace index.
+
+        *query* must contain ``vector`` (list of floats).  Optional ``tau``
+        (float, default 1.0).
+        """
+        entry = self._get_entry(dataset_id)
+        vec = query.get("vector")
+        if vec is None:
+            raise MetadataUnavailable(
+                "arrowspace search requires 'vector' (list of float64 values)"
+            )
+        tau = float(query.get("tau", 1.0))
+        q_arr = np.asarray(vec, dtype=np.float64)
+        hits = entry.aspace.search(q_arr, entry.gl, tau)
+        return {
+            "backend": "arrowspace",
+            "results": [{"index": int(i), "score": float(s)} for i, s in hits],
+        }
+
+    # ------------------------------------------------------------------
+    # Sidecar helpers (delegate to the sidecar reader)
+    # ------------------------------------------------------------------
+
+    def sidecar_manifold(self, dataset_path: Path) -> dict[str, Any]:
+        return _SidecarAdapter._read(dataset_path, "manifold.json")
+
+    def sidecar_stats(self, dataset_path: Path) -> dict[str, Any]:
+        return _SidecarAdapter._read(dataset_path, "stats.json")
 
 
-def _to_jsonable(obj: Any) -> dict[str, Any]:
-    if isinstance(obj, dict):
-        return obj
-    if hasattr(obj, "to_dict"):
-        return obj.to_dict()
-    if hasattr(obj, "__dict__"):
-        return dict(obj.__dict__)
-    return {"value": str(obj)}
-
+# ---------------------------------------------------------------------------
+# Module-level cache + loader
+# ---------------------------------------------------------------------------
 
 _cached: ArrowSpaceAdapter | None = None
 
@@ -157,24 +389,25 @@ def load() -> ArrowSpaceAdapter:
     """Pick the best available adapter.
 
     Order of preference:
-        1. pyarrowspace if importable
-        2. Sidecar JSON files under ``_arrowspace/`` (always works)
+        1. ``arrowspace`` package if importable  (pip install arrowspace)
+        2. Sidecar JSON files under ``_arrowspace/``
     """
     global _cached
     if _cached is not None:
         return _cached
     try:
-        import pyarrowspace  # type: ignore
+        import arrowspace  # type: ignore
 
-        _cached = _PyArrowSpaceAdapter(pyarrowspace)
-        log.info("ArrowSpace adapter: pyarrowspace")
+        _cached = _ArrowSpaceAdapter(arrowspace)
+        log.info("ArrowSpace adapter: arrowspace package")
         return _cached
     except Exception as e:
-        log.info("pyarrowspace unavailable (%s); falling back to sidecar adapter", e)
+        log.info("arrowspace unavailable (%s); falling back to sidecar adapter", e)
     _cached = _SidecarAdapter()
     return _cached
 
 
 def reset_adapter_cache() -> None:
+    """Test / lifecycle helper."""
     global _cached
     _cached = None

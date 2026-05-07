@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     max_window: int = 10_000
     serve_frontend: bool = True
     frontend_dir: str | None = None
+    # Directory where graph-Laplacian Zarr arrays are persisted.
+    index_store: str = "./arrowspace_index"
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod

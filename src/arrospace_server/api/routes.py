@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 
 from .. import __version__
 from ..arrowspace_adapter import ArrowSpaceAdapter
+from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotFound, InvalidSlice
 from ..settings import Settings, get_settings
@@ -39,7 +40,8 @@ def _resolve_dataset_path(settings: Settings, dataset_id: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-
+# Health
+# ---------------------------------------------------------------------------
 
 @router.get("/health")
 def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
@@ -51,6 +53,10 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
         "data_roots": list(settings.resolved_roots().keys()),
     }
 
+
+# ---------------------------------------------------------------------------
+# Dataset discovery + raw Zarr access
+# ---------------------------------------------------------------------------
 
 @router.get("/datasets")
 def list_datasets(reg: StorageRegistry = Depends(_registry)) -> dict[str, Any]:
@@ -144,55 +150,137 @@ def dataset_slice(
     }
 
 
+# ---------------------------------------------------------------------------
+# Zarr-level stats  (no arrowspace dependency)
+# ---------------------------------------------------------------------------
+
+@router.get("/datasets/{dataset_id:path}/stats")
+def dataset_stats(
+    dataset_id: str,
+    reg: StorageRegistry = Depends(_registry),
+) -> dict[str, Any]:
+    """Basic Zarr array statistics: shape, dtype, chunks, size.
+
+    For ArrowSpace graph-Laplacian analytics use the /index, /lambdas, and
+    /search endpoints below.
+    """
+    h = reg.open(dataset_id)
+    return {
+        "id": dataset_id,
+        "stats": h.stats(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Sidecar manifold  (static JSON sidecar, no arrowspace package required)
+# ---------------------------------------------------------------------------
+
 @router.get("/datasets/{dataset_id:path}/manifold")
 def dataset_manifold(
     dataset_id: str,
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
+    """Read ``_arrowspace/manifold.json`` sidecar from the dataset directory.
+
+    This endpoint serves static metadata written by upstream tooling and does
+    not require the ``arrowspace`` package.
+    """
     path = _resolve_dataset_path(settings, dataset_id)
+    try:
+        data = adapter.sidecar_manifold(path)
+    except Exception as e:
+        data = {"unavailable": str(e)}
     return {
         "id": dataset_id,
         "backend": adapter.backend,
-        "manifold": adapter.manifold(path),
+        "manifold": data,
     }
 
 
-@router.get("/datasets/{dataset_id:path}/stats")
-def dataset_stats(
+# ---------------------------------------------------------------------------
+# ArrowSpace index lifecycle
+# ---------------------------------------------------------------------------
+
+@router.post("/datasets/{dataset_id:path}/index")
+def build_index(
     dataset_id: str,
+    graph_params: dict[str, Any] | None = Body(
+        default=None,
+        example=DEFAULT_GRAPH_PARAMS,
+        description="ArrowSpaceBuilder graph params.  Omit to use server defaults.",
+    ),
+    reg: StorageRegistry = Depends(_registry),
     settings: Settings = Depends(get_settings),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
-    reg: StorageRegistry = Depends(_registry),
 ) -> dict[str, Any]:
-    handle = reg.open(dataset_id)
-    base = handle.stats()
-    path = _resolve_dataset_path(settings, dataset_id)
-    arrowspace_stats: dict[str, Any] | None = None
-    try:
-        arrowspace_stats = adapter.stats(path)
-    except Exception as e:
-        # Stats from ArrowSpace are best-effort; surface availability without 500.
-        arrowspace_stats = {"unavailable": str(e)}
+    """Build (or rebuild) the ArrowSpace graph-Laplacian index for a dataset.
+
+    Reads the full Zarr array, calls ``ArrowSpaceBuilder().build()``, persists
+    the graph Laplacian as Zarr v3 CSR arrays under ``ARROSPACE_INDEX_STORE``,
+    and caches the result in memory for fast /lambdas and /search access.
+
+    The source Zarr array must be 2-D (rows = items, columns = features).
+    """
+    h = reg.open(dataset_id)
+    # Read the full array — arrowspace needs all items at build time.
+    rs = parse_slice(None, h.summary.shape, offset=0, limit=h.summary.shape[0])
+    arr = h.read_window(rs)
+
+    index_store = Path(settings.index_store).expanduser().resolve()
+    meta = adapter.build_index(
+        dataset_id=dataset_id,
+        array=arr,
+        index_store=index_store,
+        graph_params=graph_params,
+    )
     return {
         "id": dataset_id,
-        "basic": base,
-        "arrowspace": arrowspace_stats,
-        "backend": adapter.backend,
+        "built": True,
+        "graph_params": graph_params or DEFAULT_GRAPH_PARAMS,
+        **meta,
     }
 
 
-@router.get("/datasets/{dataset_id:path}/search")
+# ---------------------------------------------------------------------------
+# ArrowSpace query endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/datasets/{dataset_id:path}/lambdas")
+def dataset_lambdas(
+    dataset_id: str,
+    adapter: ArrowSpaceAdapter = Depends(_arrowspace),
+) -> dict[str, Any]:
+    """Return the Laplacian eigenvalue distribution for a built index.
+
+    Requires a prior call to ``POST /datasets/{id}/index``.
+    Returns ``{nitems, lambdas, lambdas_sorted}``.
+    """
+    return {"id": dataset_id} | adapter.lambdas(dataset_id)
+
+
+@router.post("/datasets/{dataset_id:path}/search")
 def dataset_search(
     dataset_id: str,
-    q: str | None = Query(None, description="Free-text query"),
-    limit: int = Query(20, ge=1, le=500),
-    settings: Settings = Depends(get_settings),
+    body: dict[str, Any] = Body(
+        ...,
+        example={"vector": [0.1, 0.2, 0.3], "tau": 1.0},
+        description="Search body: 'vector' (list[float]) and optional 'tau' (float).",
+    ),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    path = _resolve_dataset_path(settings, dataset_id)
-    return adapter.search(path, {"q": q, "limit": limit}) | {"id": dataset_id}
+    """Vector search against the in-memory ArrowSpace index.
 
+    Requires a prior call to ``POST /datasets/{id}/index``.
+    Body: ``{\"vector\": [f64, ...], \"tau\": 1.0}``.
+    Returns ``{backend, results: [{index, score}, ...]}`.
+    """
+    return {"id": dataset_id} | adapter.search(dataset_id, body)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _trailing_product(shape: tuple[int, ...]) -> int:
     if len(shape) <= 1:

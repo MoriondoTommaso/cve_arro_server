@@ -1,6 +1,6 @@
 # Podman-compatible (also a valid Dockerfile). Build with:
-#   podman build -t arrospace-server -f Containerfile .
-#   docker build -t arrospace-server -f Containerfile .
+#   podman build -t arro-server -f Containerfile .
+#   docker build -t arro-server -f Containerfile .
 
 FROM docker.io/library/python:3.12-slim AS base
 
@@ -19,12 +19,14 @@ COPY frontend ./frontend
 RUN pip install --upgrade pip \
     && pip install ".[zarr]"
 
-# Optional: install pyarrow / pyarrowspace at build time by passing build args.
+# Optional: install pyarrow at build time.
 ARG INSTALL_ARROW=0
+# Optional: install arrowspace (pip install arrowspace).
+# Repo: https://github.com/tuned-org-uk/pyarrowspace
 ARG INSTALL_ARROWSPACE=0
 RUN if [ "$INSTALL_ARROW" = "1" ]; then pip install ".[arrow]"; fi \
     && if [ "$INSTALL_ARROWSPACE" = "1" ]; then pip install ".[arrowspace]" || \
-        echo "pyarrowspace not installable in this image; sidecar adapter will be used"; fi
+        echo "arrowspace not installable in this image; sidecar adapter will be used"; fi
 
 EXPOSE 8000
 ENV ARROSPACE_HOST=0.0.0.0 \
