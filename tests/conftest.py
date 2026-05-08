@@ -52,20 +52,20 @@ def tmp_zarr_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def configured_app(tmp_zarr_root: Path):
-    from arrospace_server import arrowspace_adapter
-    from arrospace_server import settings as settings_mod
-    from arrospace_server.app import create_app
-    from arrospace_server.storage import registry as registry_mod
+    from arro_server import arrowspace_adapter
+    from arro_server import settings as settings_mod
+    from arro_server.app import create_app
+    from arro_server.storage import registry as registry_mod
 
-    os.environ["ARROSPACE_DATA_ROOTS"] = f"main={tmp_zarr_root}"
-    os.environ["ARROSPACE_SERVE_FRONTEND"] = "false"
+    os.environ["ARRO_SERVER_DATA_ROOTS"] = f"main={tmp_zarr_root}"
+    os.environ["ARRO_SERVER_SERVE_FRONTEND"] = "false"
     settings_mod.reset_settings_cache()
     registry_mod.reset_registry_cache()
     arrowspace_adapter.reset_adapter_cache()
     app = create_app()
     yield app
-    os.environ.pop("ARROSPACE_DATA_ROOTS", None)
-    os.environ.pop("ARROSPACE_SERVE_FRONTEND", None)
+    os.environ.pop("ARRO_SERVER_DATA_ROOTS", None)
+    os.environ.pop("ARRO_SERVER_SERVE_FRONTEND", None)
     settings_mod.reset_settings_cache()
     registry_mod.reset_registry_cache()
     arrowspace_adapter.reset_adapter_cache()

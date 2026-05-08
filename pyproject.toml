@@ -34,10 +34,13 @@ dev = [
 ]
 
 [project.scripts]
-arro-server = "arrospace_server.__main__:main"
+arro-server = "arro_server.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/arrospace_server"]
+packages = ["src/arro_server"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"frontend" = "share/arro_server/frontend"
 
 [tool.ruff]
 line-length = 100

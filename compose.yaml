@@ -1,22 +1,25 @@
 # Works with both `docker compose` and `podman-compose`.
 # Override DATA_DIR on the host to expose your Zarr roots.
+#
+# WARNING: ARRO_SERVER_CORS_ORIGINS is set to "*" here for local development
+# convenience. Do NOT use "*" in production — set it to your actual origin(s).
 
 services:
-  arrospace:
+  arro-server:
     build:
       context: .
       dockerfile: Containerfile
       args:
         INSTALL_ARROW: "0"
         INSTALL_ARROWSPACE: "0"
-    image: arrospace-server:dev
-    container_name: arrospace
+    image: arro-server:dev
+    container_name: arro-server
     ports:
       - "8000:8000"
     environment:
-      ARROSPACE_DATA_ROOTS: "main=/data"
-      ARROSPACE_CORS_ORIGINS: "*"
-      ARROSPACE_DEFAULT_WINDOW: "100"
+      ARRO_SERVER_DATA_ROOTS: "main=/data"
+      ARRO_SERVER_CORS_ORIGINS: "*"
+      ARRO_SERVER_DEFAULT_WINDOW: "100"
     volumes:
       # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
       - "${DATA_DIR:-./example_data}:/data:ro,Z"

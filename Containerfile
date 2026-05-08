@@ -28,8 +28,15 @@ RUN if [ "$INSTALL_ARROW" = "1" ]; then pip install ".[arrow]"; fi \
     && if [ "$INSTALL_ARROWSPACE" = "1" ]; then pip install ".[arrowspace]" || \
         echo "arrowspace not installable in this image; sidecar adapter will be used"; fi
 
-EXPOSE 8000
-ENV ARROSPACE_HOST=0.0.0.0 \
-    ARROSPACE_PORT=8000
+# Run as a non-root user for security.
+RUN adduser --disabled-password --gecos "" appuser
+USER appuser
 
-CMD ["python", "-m", "arrospace_server"]
+EXPOSE 8000
+ENV ARRO_SERVER_HOST=0.0.0.0 \
+    ARRO_SERVER_PORT=8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+
+CMD ["python", "-m", "arro_server"]
