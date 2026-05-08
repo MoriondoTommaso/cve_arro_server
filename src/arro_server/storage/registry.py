@@ -4,9 +4,9 @@ from functools import lru_cache
 
 from ..errors import DatasetNotFound
 from ..settings import get_settings
+from . import StorageBackend
 from .base import DatasetHandle, DatasetSummary
 from .zarr_fs import ZarrFilesystemBackend
-from . import StorageBackend
 
 
 class StorageRegistry:

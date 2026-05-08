@@ -34,7 +34,7 @@ def main() -> None:
     arr[:] = rng.standard_normal(size=(1000, 8)).astype("float32")
     try:
         arr.attrs["description"] = "Synthetic 1000x8 matrix"
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     sidecar = matrix_path / "_arrowspace"

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from arrospace_server.slicing import enforce_window_budget, parse_slice
 
 

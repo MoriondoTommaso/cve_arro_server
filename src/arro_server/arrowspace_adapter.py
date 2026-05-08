@@ -41,7 +41,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -283,7 +283,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - optional dep
             meta_dict["csr_shape"] = list(csr_shape)
             (dest / "meta.json").write_text(json.dumps(meta_dict))
             log.info("Persisted graph-Laplacian CSR to %s", dest)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning(
                 "Failed to persist graph-Laplacian CSR for '%s'; "
                 "in-memory index is still available for this server lifetime.",

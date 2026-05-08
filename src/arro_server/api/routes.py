@@ -6,8 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Query
 
 from .. import __version__
-from ..arrowspace_adapter import ArrowSpaceAdapter
-from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS
+from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice
 from ..settings import Settings, get_settings
