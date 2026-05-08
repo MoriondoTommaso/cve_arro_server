@@ -11,23 +11,27 @@ from arro_server.api.serializers import deep_sanitize
 # Scalar coercion
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("val, expected", [
-    (np.uint8(3),       3),
-    (np.int32(-7),      -7),
-    (np.int64(2**40),   2**40),
-    (np.float32(1.5),   1.5),
-    (np.float64(2.5),   2.5),
-    (np.bool_(True),    True),
-    (np.bool_(False),   False),
-    (float("nan"),      None),
-    (float("inf"),      None),
-    (float("-inf"),     None),
-    (np.float32("nan"), None),
-    (42,                42),      # plain int passes through
-    (3.14,              3.14),    # plain float passes through
-    ("hello",           "hello"), # str passes through
-    (None,              None),    # None passes through
-])
+
+@pytest.mark.parametrize(
+    "val, expected",
+    [
+        (np.uint8(3), 3),
+        (np.int32(-7), -7),
+        (np.int64(2**40), 2**40),
+        (np.float32(1.5), 1.5),
+        (np.float64(2.5), 2.5),
+        (np.bool_(True), True),
+        (np.bool_(False), False),
+        (float("nan"), None),
+        (float("inf"), None),
+        (float("-inf"), None),
+        (np.float32("nan"), None),
+        (42, 42),  # plain int passes through
+        (3.14, 3.14),  # plain float passes through
+        ("hello", "hello"),  # str passes through
+        (None, None),  # None passes through
+    ],
+)
 def test_deep_sanitize_scalars(val, expected):
     result = deep_sanitize(val)
     if expected is None:
@@ -40,6 +44,7 @@ def test_deep_sanitize_scalars(val, expected):
 # ---------------------------------------------------------------------------
 # Nested structures
 # ---------------------------------------------------------------------------
+
 
 def test_deep_sanitize_dict():
     raw = {
@@ -83,6 +88,7 @@ def test_deep_sanitize_ndarray_leaf():
 # ---------------------------------------------------------------------------
 # Idempotency
 # ---------------------------------------------------------------------------
+
 
 def test_deep_sanitize_already_clean():
     raw = {"x": 1, "y": [2, 3], "z": "text"}

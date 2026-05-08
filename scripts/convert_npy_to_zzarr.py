@@ -8,9 +8,7 @@ import zarr
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Convert a .npy file to a local Zarr directory."
-    )
+    parser = argparse.ArgumentParser(description="Convert a .npy file to a local Zarr directory.")
     parser.add_argument(
         "input_file",
         help="Path to the input .npy file",

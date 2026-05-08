@@ -30,6 +30,7 @@ def _arrowspace() -> ArrowSpaceAdapter:
 # Health
 # ---------------------------------------------------------------------------
 
+
 @router.get("/health")
 def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     return {
@@ -44,6 +45,7 @@ def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Dataset discovery + raw Zarr access
 # ---------------------------------------------------------------------------
+
 
 @router.get("/datasets")
 def list_datasets(reg: StorageRegistry = Depends(_registry)) -> dict[str, Any]:
@@ -147,6 +149,7 @@ def dataset_slice(
 # Stats
 # ---------------------------------------------------------------------------
 
+
 @router.get("/datasets/{dataset_id}/stats")
 def dataset_stats(
     dataset_id: str,
@@ -163,6 +166,7 @@ def dataset_stats(
 # ---------------------------------------------------------------------------
 # Sidecar manifold  (static JSON sidecar, no arrowspace package required)
 # ---------------------------------------------------------------------------
+
 
 @router.get("/datasets/{dataset_id}/manifold")
 def dataset_manifold(
@@ -191,6 +195,7 @@ def dataset_manifold(
 # ---------------------------------------------------------------------------
 # ArrowSpace index lifecycle
 # ---------------------------------------------------------------------------
+
 
 @router.post("/datasets/{dataset_id}/index")
 def build_index(
@@ -237,6 +242,7 @@ def build_index(
 # ---------------------------------------------------------------------------
 # ArrowSpace query endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/datasets/{dataset_id}/lambdas")
 def dataset_lambdas(

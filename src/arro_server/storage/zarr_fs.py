@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 
 try:  # pragma: no cover - import-time guard
     import zarr  # type: ignore
+
     _ZARR_AVAILABLE = True
 except Exception:
     zarr = None  # type: ignore[assignment]
@@ -140,11 +141,7 @@ class ZarrFilesystemBackend:
 
     @staticmethod
     def _is_zarr_node(p: Path) -> bool:
-        return (
-            (p / "zarr.json").exists()
-            or (p / ".zarray").exists()
-            or (p / ".zgroup").exists()
-        )
+        return (p / "zarr.json").exists() or (p / ".zarray").exists() or (p / ".zgroup").exists()
 
     def _collect(
         self,

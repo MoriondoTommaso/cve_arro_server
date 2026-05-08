@@ -65,6 +65,7 @@ DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
 # Abstract base
 # ---------------------------------------------------------------------------
 
+
 class ArrowSpaceAdapter(ABC):
     """Common interface for all ArrowSpace backend implementations."""
 
@@ -97,6 +98,7 @@ class ArrowSpaceAdapter(ABC):
 # ---------------------------------------------------------------------------
 # Sidecar JSON adapter (no package dependency)
 # ---------------------------------------------------------------------------
+
 
 class _SidecarAdapter(ArrowSpaceAdapter):
     """Reads pre-written JSON sidecar files from ``<dataset>/_arrowspace/``."""
@@ -138,6 +140,7 @@ class _SidecarAdapter(ArrowSpaceAdapter):
 # No-op adapter
 # ---------------------------------------------------------------------------
 
+
 class _UnavailableAdapter(ArrowSpaceAdapter):
     def __init__(self) -> None:
         super().__init__(available=False, backend="none")
@@ -162,9 +165,11 @@ class _UnavailableAdapter(ArrowSpaceAdapter):
 # Bounded LRU cache helper
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _IndexEntry:
     """In-memory cache slot for one built index."""
+
     aspace: Any
     gl: Any
     nitems: int
@@ -206,6 +211,7 @@ class _LRUIndexCache:
 # ---------------------------------------------------------------------------
 # Live arrowspace adapter
 # ---------------------------------------------------------------------------
+
 
 class _ArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - optional dep
     """Live adapter backed by the ``arrowspace`` package.
@@ -317,7 +323,9 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - optional dep
 
         log.info(
             "Building arrowspace index for %s (shape=%s, params=%s)",
-            dataset_id, arr64.shape, gp,
+            dataset_id,
+            arr64.shape,
+            gp,
         )
         aspace, gl = self._mod.ArrowSpaceBuilder().build(gp, arr64)
 
@@ -348,8 +356,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - optional dep
         entry = self._cache.get(dataset_id)
         if entry is None:
             raise MetadataUnavailable(
-                f"No index built for '{dataset_id}'. "
-                "Call POST /datasets/{id}/index first."
+                f"No index built for '{dataset_id}'. Call POST /datasets/{{id}}/index first."
             )
         return entry
 
@@ -399,6 +406,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):  # pragma: no cover - optional dep
 # Module-level factory + cache
 # ---------------------------------------------------------------------------
 
+
 @lru_cache(maxsize=1)
 def load() -> ArrowSpaceAdapter:
     """Return the best available ArrowSpace adapter.
@@ -414,6 +422,7 @@ def load() -> ArrowSpaceAdapter:
 
     try:
         import arrowspace as _mod  # type: ignore
+
         cache_size = get_settings().index_cache_size
         log.info("arrowspace package found; using live adapter (cache_size=%d)", cache_size)
         return _ArrowSpaceAdapter(_mod, cache_size=cache_size)

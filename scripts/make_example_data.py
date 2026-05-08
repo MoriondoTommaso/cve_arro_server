@@ -27,9 +27,7 @@ def main() -> None:
 
     # Matrix dataset.
     matrix_path = ROOT / "matrix"
-    arr = zarr.open(
-        str(matrix_path), mode="w", shape=(1000, 8), chunks=(200, 8), dtype="float32"
-    )
+    arr = zarr.open(str(matrix_path), mode="w", shape=(1000, 8), chunks=(200, 8), dtype="float32")
     rng = np.random.default_rng(42)
     arr[:] = rng.standard_normal(size=(1000, 8)).astype("float32")
     try:
@@ -71,7 +69,9 @@ def main() -> None:
 
     # 3D cube dataset (e.g. images).
     cube_path = ROOT / "cube"
-    cube = zarr.open(str(cube_path), mode="w", shape=(20, 32, 32), chunks=(5, 32, 32), dtype="uint8")
+    cube = zarr.open(
+        str(cube_path), mode="w", shape=(20, 32, 32), chunks=(5, 32, 32), dtype="uint8"
+    )
     cube[:] = (rng.random(size=(20, 32, 32)) * 255).astype("uint8")
 
     print(f"wrote example data to {ROOT}")

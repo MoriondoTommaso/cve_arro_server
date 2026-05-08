@@ -43,7 +43,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             else:
                 # Installed wheel: share/arro_server/frontend (hatch shared-data)
                 try:
-                    _pkg = importlib.resources.files("arro_server") / "../../../share/arro_server/frontend"
+                    _pkg = (
+                        importlib.resources.files("arro_server")
+                        / "../../../share/arro_server/frontend"
+                    )
                     _resolved = Path(str(_pkg)).resolve()
                     if _resolved.exists():
                         frontend_dir = _resolved

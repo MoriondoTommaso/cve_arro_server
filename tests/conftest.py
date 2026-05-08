@@ -39,7 +39,9 @@ def tmp_zarr_root(tmp_path: Path) -> Path:
     (sidecar / "manifold.json").write_text(json.dumps({"dim": 2, "n_points": 50}))
     (sidecar / "stats.json").write_text(json.dumps({"mean": 99.5, "std": 57.7}))
     (sidecar / "index.json").write_text(
-        json.dumps({"items": [{"id": "row-0", "tags": ["alpha"]}, {"id": "row-1", "tags": ["beta"]}]})
+        json.dumps(
+            {"items": [{"id": "row-0", "tags": ["alpha"]}, {"id": "row-1", "tags": ["beta"]}]}
+        )
     )
 
     # Dataset 2: 1D ints
