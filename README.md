@@ -99,6 +99,37 @@ uv run src/arro_server
 # Docs: http://localhost:8000/docs
 ```
 
+### Pre-commit hook
+
+The repository ships a [pre-commit](https://pre-commit.com/) configuration
+that runs **ruff** (linter + formatter) automatically before every commit,
+keeping style consistent without manual intervention.
+
+Install the hook once after cloning:
+
+```bash
+# pre-commit is included in the dev extras, so no separate install needed
+uv run pre-commit install
+```
+
+From that point on, every `git commit` will:
+
+1. Run `ruff check --fix` — lint and auto-fix safe violations.
+2. Run `ruff format` — enforce consistent formatting.
+
+If either step modifies or rejects a file the commit is aborted; review the
+diff, stage the changes, and re-commit.
+
+To run the checks manually across the whole tree without committing:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+> **Note:** ruff settings (line length, selected rules, per-file ignores) live
+> in `[tool.ruff]` inside `pyproject.toml`. Adjust them there if you need to
+> loosen or tighten the rules for your fork.
+
 ## Tests
 
 ```bash
