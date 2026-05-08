@@ -25,6 +25,7 @@ arrow = ["pyarrow>=15.0"]
 arrowspace = ["arrowspace"]
 dev = [
     "pytest>=8.0",
+    "fastapi[standard]>=0.110",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
     "ruff>=0.4",

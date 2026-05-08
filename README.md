@@ -6,10 +6,16 @@ boilerplate for ArrowSpace / arrowspace infrastructure: clean adapter
 interfaces, optional dependencies, and a tiny vanilla-JS viewer for smoke
 testing dataset browsing, slicing, and metadata.
 
+## Quick start
+```bash
+uv pip install -e .[dev]
+uv run src/arro_server/
+```
+
 ## Layout
 
 ```
-src/arro-server_server/   # Python package
+src/arro_server/   # Python package
   app.py                # FastAPI application factory
   settings.py           # pydantic-settings configuration
   slicing.py            # numpy-style slice/window parsing
@@ -80,15 +86,15 @@ See `.env.example`.
 ## Local bootstrap
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv venv .venv && source .venv/bin/activate
+uv pip install -e ".[dev]"
 
 # generate a sample Zarr root
-python scripts/make_example_data.py
+uv run scripts/make_example_data.py
 
 # point at it and serve
-export arro-server_DATA_ROOTS="main=$(pwd)/example_data"
-python -m arro-server_server
+export ARRO_SERVER_DATA_ROOTS="main=$(pwd)/example_data"
+uv run src/arro_server
 # UI:  http://localhost:8000/ui
 # Docs: http://localhost:8000/docs
 ```
