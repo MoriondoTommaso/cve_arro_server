@@ -110,7 +110,7 @@ class TestLambdas:
         """lambdas_sorted must be a list of [float, int] pairs."""
         result = built_adapter.lambdas("test/ds")
         for pair in result["lambdas_sorted"]:
-            assert len(pair) == 2  # noqa: PLR2004
+            assert len(pair) == 2
             assert isinstance(pair[0], float)
             assert isinstance(pair[1], int)
 
@@ -178,7 +178,7 @@ class TestManifoldData:
 
     def test_lambdas_sorted_capped_at_50(self, built_adapter):
         result = built_adapter.manifold_data("test/ds")
-        assert len(result["lambdas_sorted"]) <= 50  # noqa: PLR2004
+        assert len(result["lambdas_sorted"]) <= 50
 
     def test_nitems_correct(self, built_adapter):
         result = built_adapter.manifold_data("test/ds")
@@ -198,7 +198,7 @@ class TestStatsData:
 
     def test_gl_shape_is_two_element_list(self, built_adapter):
         result = built_adapter.stats_data("test/ds")
-        assert len(result["gl_shape"]) == 2  # noqa: PLR2004
+        assert len(result["gl_shape"]) == 2
 
 
 # ---------------------------------------------------------------------------
