@@ -350,7 +350,7 @@ class _ArrowSpaceAdapter(ArrowSpaceAdapter):
     ) -> dict[str, Any]:
         gp = graph_params or DEFAULT_GRAPH_PARAMS
         arr64 = np.asarray(array, dtype=np.float64)
-        if arr64.ndim != 2:  # noqa: PLR2004
+        if arr64.ndim != 2:
             raise ValueError(
                 f"arrowspace requires a 2-D array (items x features); got shape {arr64.shape}"
             )

@@ -14,7 +14,6 @@ Bug fixes reflected here:
      broken __init__.py falls back to sidecar without crashing.
 """
 
-import json
 import os
 import sys
 import types
@@ -24,7 +23,6 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Fake arrowspace module
@@ -539,7 +537,7 @@ class TestLRUCache:
         adapter.lambdas("ds3")
 
     def test_cache_delete(self):
-        from arro_server.arrowspace_adapter import _LRUIndexCache, _IndexEntry
+        from arro_server.arrowspace_adapter import _IndexEntry, _LRUIndexCache
         cache = _LRUIndexCache(maxsize=4)
         entry = _IndexEntry(aspace=None, gl=None, nitems=1, nfeatures=1, nclusters=1)
         cache.put("k1", entry)
