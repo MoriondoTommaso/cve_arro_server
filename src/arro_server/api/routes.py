@@ -86,9 +86,8 @@ def _arrowspace() -> ArrowSpaceAdapter:
 
 @router.get("/health")
 def health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    # Check prompt engine + embedder readiness without triggering cold-start
-    engine_ready    = PromptSearchEngine._instance is not None
-    embedder_ready  = False
+    engine_ready   = PromptSearchEngine._instance is not None
+    embedder_ready = False
     try:
         from ..embedder import EmbedderService
         embedder_ready = EmbedderService._instance is not None
@@ -138,6 +137,13 @@ def dataset_metadata(
     reg: StorageRegistry = Depends(_registry),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
+    # _ZarrArrayHandle may not expose .attrs — fall back to empty dict safely
+    attrs = getattr(h, "attrs", None)
+    if attrs is None:
+        try:
+            attrs = dict(h.array.attrs)  # zarr v2/v3 array attrs
+        except Exception:
+            attrs = {}
     return {
         "id": h.summary.dataset_id,
         "root": h.summary.root,
@@ -146,7 +152,7 @@ def dataset_metadata(
         "shape": list(h.summary.shape),
         "dtype": h.summary.dtype,
         "chunks": list(h.summary.chunks) if h.summary.chunks else None,
-        "attrs": h.attrs,
+        "attrs": attrs,
     }
 
 
@@ -239,10 +245,16 @@ def build_index(
 ) -> dict[str, Any]:
     h            = reg.open(dataset_id)
     graph_params = (body.graph_params if body else None) or DEFAULT_GRAPH_PARAMS
-    store        = Path(settings.index_store) / dataset_id
-    store.mkdir(parents=True, exist_ok=True)
+    # FIX: _ArrowSpaceAdapter.build_index() does not accept a 'store' kwarg.
+    # Pass only the arguments the adapter actually accepts.
     try:
-        result = adapter.build_index(h, graph_params=graph_params, store=store)
+        result = adapter.build_index(h, graph_params=graph_params)
+    except TypeError:
+        # Older adapter signature: positional only
+        try:
+            result = adapter.build_index(h, graph_params)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"build_index failed: {exc}") from exc
     except NotImplementedError:
         raise HTTPException(
             status_code=501,
@@ -504,11 +516,7 @@ def prompts_health() -> dict[str, Any]:
 
 @router.get("/prompts/warm")
 def prompts_warm() -> dict[str, Any]:
-    """Trigger (or confirm) warm-up of the PromptSearchEngine and EmbedderService.
-
-    Call this once after deploy to front-load the index-build and model-load
-    cost before real user traffic arrives.  Safe to call repeatedly.
-    """
+    """Trigger (or confirm) warm-up of the PromptSearchEngine and EmbedderService."""
     engine    = _get_engine()
     _embedder = _get_embedder()
     return {
@@ -550,10 +558,7 @@ def prompts_graph_laplacian() -> dict[str, Any]:
 
 @router.get("/prompts/audit")
 def prompts_audit() -> dict[str, Any]:
-    """Full audit payload: degree stats, Fiedler vector, PCA 2D scatter.
-
-    Mirrors the cells in search_engine_demo.ipynb that visualise the corpus.
-    """
+    """Full audit payload: degree stats, Fiedler vector, PCA 2D scatter."""
     engine = _get_engine()
     try:
         from sklearn.decomposition import PCA  # type: ignore
@@ -563,21 +568,18 @@ def prompts_audit() -> dict[str, Any]:
             detail="scikit-learn is required for /prompts/audit.",
         ) from exc
 
-    # Degree stats
     try:
         gl_dense = engine.gl.to_dense()
         degrees  = np.array(gl_dense.sum(axis=1)).ravel() + gl_dense.diagonal()
     except Exception:
         degrees = np.zeros(engine.aspace.nitems)
 
-    # Fiedler vector (second-smallest eigenvector)
     try:
         lambdas = engine.gl.lambdas()
         fiedler_val = float(sorted(lambdas)[1]) if len(lambdas) > 1 else 0.0
     except Exception:
         fiedler_val = 0.0
 
-    # PCA 2D projection
     pca    = PCA(n_components=2)
     coords = pca.fit_transform(engine.embs).tolist()
 
@@ -597,10 +599,7 @@ def prompts_audit() -> dict[str, Any]:
 
 @router.post("/prompts/search", response_model=PromptSearchResponse)
 def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
-    """Semantic search with a pre-embedded 768-d nomic vector.
-
-    For NL text queries use POST /api/prompts/nl_search instead.
-    """
+    """Semantic search with a pre-embedded 768-d nomic vector."""
     engine = _get_engine()
     q      = np.asarray(body.vector, dtype=np.float64)
     try:
@@ -619,23 +618,18 @@ def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
 
 @router.post("/prompts/nl_search", response_model=PromptSearchResponse)
 def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:
-    """Natural-language semantic search.
+    """Natural-language semantic search — primary frontend endpoint.
 
     The server embeds `query` using EmbedderService
-    (nomic-ai/nomic-embed-text-v1.5, SDPA) and runs the ArrowSpace spectral
-    search + MMR rerank pipeline.  This is the primary endpoint for all
-    frontend consumers.
+    (nomic-ai/nomic-embed-text-v1.5) and runs the ArrowSpace spectral
+    search + MMR rerank pipeline.
 
     Request body example::
 
         {"query": "how to write a DALL-E prompt for minimalist art", "k": 10}
-
-    Response envelope: PromptSearchResponse with result_count results,
-    each carrying _score, _salience, _tau metadata.
     """
-    embedder = _get_embedder()
-    engine   = _get_engine()
-
+    embedder  = _get_embedder()
+    engine    = _get_engine()
     query_vec = embedder.embed(body.query)
     try:
         raw = engine.search(
