@@ -48,7 +48,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from .. import __version__
 from ..arrowspace_adapter import DEFAULT_GRAPH_PARAMS, ArrowSpaceAdapter, _ArrowSpaceAdapter
 from ..arrowspace_adapter import load as load_arrowspace
-from ..errors import DatasetNotSliceable, InvalidSlice
+from ..errors import DatasetNotSliceable, InvalidSlice, OptionalDependencyMissing
 from ..search_engine import PromptSearchEngine
 from ..settings import Settings, get_settings
 from ..slicing import enforce_window_budget, parse_slice, trailing_product
@@ -243,24 +243,50 @@ def build_index(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
     settings: Settings   = Depends(get_settings),
 ) -> dict[str, Any]:
+    """Build and persist an ArrowSpace graph-Laplacian index for a dataset.
+
+    The adapter signature is:
+        build_index(dataset_id: str, array: np.ndarray, index_store: Path, graph_params=None)
+
+    We resolve each argument from the registry handle and settings:
+      - dataset_id   : the URL path parameter (string key used by the cache)
+      - array        : full float64 matrix read from Zarr (all rows)
+      - index_store  : first resolved data root on disk, used as persistence dir
+      - graph_params : from request body, falling back to DEFAULT_GRAPH_PARAMS
+    """
     h            = reg.open(dataset_id)
     graph_params = (body.graph_params if body else None) or DEFAULT_GRAPH_PARAMS
-    # FIX: _ArrowSpaceAdapter.build_index() does not accept a 'store' kwarg.
-    # Pass only the arguments the adapter actually accepts.
+
+    # Read the full array from Zarr (float64 required by arrowspace)
+    array = h.read(offset=0, limit=h.shape[0]).astype(np.float64)
+
+    # Resolve a writable index_store directory.
+    # Use the first configured data root; fall back to a sibling of the Zarr path.
+    roots = list(settings.resolved_roots.values())
+    if roots:
+        index_store = Path(roots[0]).parent / "_arrowspace_index"
+    else:
+        index_store = Path(h.summary.path).parent / "_arrowspace_index"
+    index_store.mkdir(parents=True, exist_ok=True)
+
     try:
-        result = adapter.build_index(h, graph_params=graph_params)
-    except TypeError:
-        # Older adapter signature: positional only
-        try:
-            result = adapter.build_index(h, graph_params)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"build_index failed: {exc}") from exc
-    except NotImplementedError:
+        result = adapter.build_index(
+            dataset_id,
+            array,
+            index_store,
+            graph_params=graph_params,
+        )
+    except OptionalDependencyMissing as exc:
         raise HTTPException(
             status_code=501,
-            detail="Index building requires the arrowspace package. "
-                   "The sidecar adapter is read-only.",
-        ) from None
+            detail=(
+                "Index building requires the arrowspace package. "
+                "Install it with: pip install arrowspace"
+            ),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"build_index failed: {exc}") from exc
+
     return result
 
 
@@ -298,7 +324,7 @@ def dataset_items(
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
     try:
-        return adapter.items(h.path)
+        return adapter.get_all_items(h.summary.dataset_id)
     except (FileNotFoundError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -312,7 +338,7 @@ def dataset_item(
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
     try:
-        return adapter.item(h.path, item_index)
+        return adapter.get_item(h.summary.dataset_id, item_index)
     except (FileNotFoundError, IndexError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -324,13 +350,12 @@ def spectral_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h  = reg.open(dataset_id)
-    q  = np.asarray(body.vector, dtype=np.float64)
+    h       = reg.open(dataset_id)
+    q_dict  = {"vector": body.vector, "tau": body.tau}
     try:
-        results = adapter.search(h.path, q, tau=body.tau)
-    except NotImplementedError:
+        return adapter.search(h.summary.dataset_id, q_dict)
+    except OptionalDependencyMissing:
         raise HTTPException(status_code=501, detail="spectral search requires arrowspace package") from None
-    return {"results": results}
 
 
 @router.post("/datasets/{dataset_id}/search/energy")
@@ -340,13 +365,12 @@ def energy_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h  = reg.open(dataset_id)
-    q  = np.asarray(body.vector, dtype=np.float64)
+    h       = reg.open(dataset_id)
+    q_dict  = {"vector": body.vector, "k": body.k}
     try:
-        results = adapter.search_energy(h.path, q, k=body.k)
-    except NotImplementedError:
+        return adapter.search_energy(h.summary.dataset_id, q_dict)
+    except OptionalDependencyMissing:
         raise HTTPException(status_code=501, detail="energy search requires arrowspace package") from None
-    return {"results": results}
 
 
 @router.post("/datasets/{dataset_id}/search/hybrid")
@@ -356,13 +380,12 @@ def hybrid_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h  = reg.open(dataset_id)
-    q  = np.asarray(body.vector, dtype=np.float64)
+    h       = reg.open(dataset_id)
+    q_dict  = {"vector": body.vector, "alpha": body.alpha}
     try:
-        results = adapter.search_hybrid(h.path, q, alpha=body.alpha)
-    except NotImplementedError:
+        return adapter.search_hybrid(h.summary.dataset_id, q_dict)
+    except OptionalDependencyMissing:
         raise HTTPException(status_code=501, detail="hybrid search requires arrowspace package") from None
-    return {"results": results}
 
 
 @router.post("/datasets/{dataset_id}/search/linear")
@@ -372,13 +395,12 @@ def linear_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h  = reg.open(dataset_id)
-    q  = np.asarray(body.vector, dtype=np.float64)
+    h       = reg.open(dataset_id)
+    q_dict  = {"vector": body.vector, "k": body.k}
     try:
-        results = adapter.search_linear(h.path, q, k=body.k)
-    except NotImplementedError:
+        return adapter.search_linear_sorted(h.summary.dataset_id, q_dict)
+    except OptionalDependencyMissing:
         raise HTTPException(status_code=501, detail="linear search requires arrowspace package") from None
-    return {"results": results}
 
 
 @router.post("/datasets/{dataset_id}/search/batch")
@@ -388,13 +410,12 @@ def batch_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h       = reg.open(dataset_id)
-    vectors = [np.asarray(v, dtype=np.float64) for v in body.vectors]
+    h      = reg.open(dataset_id)
+    q_dict = {"vectors": body.vectors, "tau": body.tau}
     try:
-        results = adapter.search_batch(h.path, vectors, tau=body.tau)
-    except NotImplementedError:
+        return adapter.search_batch(h.summary.dataset_id, q_dict)
+    except OptionalDependencyMissing:
         raise HTTPException(status_code=501, detail="batch search requires arrowspace package") from None
-    return {"results": results}
 
 
 # ---------------------------------------------------------------------------
@@ -410,8 +431,8 @@ def spot_motives_eigen(
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
     try:
-        return adapter.spot_motives_eigen(h.path)
-    except (FileNotFoundError, NotImplementedError) as exc:
+        return adapter.spot_motives_eigen(h.summary.dataset_id)
+    except (OptionalDependencyMissing, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -423,8 +444,8 @@ def spot_motives_energy(
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
     try:
-        return adapter.spot_motives_energy(h.path)
-    except (FileNotFoundError, NotImplementedError) as exc:
+        return adapter.spot_motives_energy(h.summary.dataset_id)
+    except (OptionalDependencyMissing, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -436,8 +457,8 @@ def spot_subgraph_centroids(
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
     try:
-        return adapter.spot_subgraph_centroids(h.path)
-    except (FileNotFoundError, NotImplementedError) as exc:
+        return adapter.spot_subg_centroids(h.summary.dataset_id)
+    except (OptionalDependencyMissing, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -449,8 +470,8 @@ def spot_subgraph_motives(
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
     try:
-        return adapter.spot_subgraph_motives(h.path)
-    except (FileNotFoundError, NotImplementedError) as exc:
+        return adapter.spot_subg_motives(h.summary.dataset_id)
+    except (OptionalDependencyMissing, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
