@@ -2,50 +2,243 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ArroSpace Viewer</title>
+
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1"
+    />
+
+    <title>ArroSpace AI Viewer</title>
+
     <link rel="stylesheet" href="./styles.css" />
+
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+    />
+
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin
+    />
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
+
   <body>
     <header class="topbar">
-      <h1>ArroSpace</h1>
-      <span id="health" class="health">…</span>
+      <div>
+        <h1>ArroSpace AI Viewer</h1>
+      </div>
+
+      <span id="health" class="health">
+        Connecting...
+      </span>
     </header>
+
     <main class="layout">
       <aside class="sidebar">
-        <h2>Datasets</h2>
-        <input id="filter" type="search" placeholder="Filter…" />
+        <div class="sidebar-header">
+          <div class="sidebar-top">
+            <h2>Datasets</h2>
+            <div class="sidebar-actions">
+              <span id="dataset-count">0</span>
+              <button id="refresh-btn" class="icon-button" title="Refresh datasets">
+                ↻
+              </button>
+            </div>
+          </div>
+
+          <p>
+            Explore ArrowSpace manifolds, metadata,
+            statistics and tensor slices.
+          </p>
+        </div>
+
+        <div class="search-box">
+          <input
+            id="filter"
+            type="search"
+            placeholder="Search datasets..."
+          />
+
+          <span id="filter-status">
+            All datasets
+          </span>
+        </div>
+        
+        <div class="spectral-control">
+          <div class="spectral-label-row">
+            <label for="spectral-slider">
+              Spectral-topological weight
+            </label>
+
+            <span id="spectral-value">
+              0.50
+            </span>
+          </div>
+        
+        <div class="search-results-panel">
+          <div class="search-results-header">
+            <span>Search Mode</span>
+            <strong id="search-mode-label">Local filter</strong>
+          </div>
+
+          <p id="search-hint">
+            Type a query to filter datasets. Spectral weighting is ready for ArrowSpace search.
+          </p>
+        </div>
+
+          <input
+            id="spectral-slider"
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value="0.5"
+          />
+
+          <p>
+            Balance lexical search with ArrowSpace topology.
+          </p>
+        </div>
+
         <ul id="dataset-list"></ul>
       </aside>
+
       <section class="content">
         <header class="content-header">
-          <h2 id="dataset-title">Select a dataset</h2>
+          <div>
+            <h2 id="dataset-title">
+              Select a dataset
+            </h2>
+
+            <p class="subtitle">
+              Interactive dataset exploration and
+              manifold inspection
+            </p>
+            <button
+              id="copy-id-btn"
+              class="secondary-button"
+              disabled
+            >
+              Copy Dataset ID
+            </button>
+          </div>
+
           <div class="slice-controls">
             <label>
-              slice
-              <input id="slice-input" placeholder="e.g. 0:100,:" />
+              Slice
+              <input
+                id="slice-input"
+                placeholder="e.g. 0:100,:"
+              />
             </label>
-            <button id="apply-slice">Apply</button>
-            <button id="reset-slice">Reset</button>
+
+            <button id="apply-slice">
+              Apply
+            </button>
+
+            <button id="reset-slice">
+              Reset
+            </button>
           </div>
         </header>
+
         <div class="panels">
           <div class="panel meta-panel">
             <h3>Metadata</h3>
+
             <pre id="metadata-out">—</pre>
+
             <h3>Manifold</h3>
+
             <pre id="manifold-out">—</pre>
-            <h3>Stats</h3>
+
+            <h3>Statistics</h3>
+
             <pre id="stats-out">—</pre>
           </div>
+
           <div class="panel data-panel">
-            <h3>Data</h3>
-            <div id="data-status" class="status"></div>
-            <div id="grid" class="grid"></div>
+            <div class="data-header">
+              <h3>Dataset Preview</h3>
+
+              <div
+                id="data-status"
+                class="status"
+              ></div>
+            </div>
+            
+            <div class="metric-grid">
+              <div class="metric-card">
+                <span class="metric-label">
+                  Dataset Type
+                </span>
+
+                <span
+                  id="metric-kind"
+                  class="metric-value"
+                >
+                  —
+                </span>
+              </div>
+
+              <div class="metric-card">
+                <span class="metric-label">
+                  Shape
+                </span>
+
+                <span
+                  id="metric-shape"
+                  class="metric-value"
+                >
+                  —
+                </span>
+              </div>
+
+              <div class="metric-card">
+                <span class="metric-label">
+                  Data Type
+                </span>
+
+                <span
+                  id="metric-dtype"
+                  class="metric-value"
+                >
+                  —
+            </span>
+          </div>
+        </div>
+        <div
+          id="grid"
+          class="grid"
+        >
+            <div
+              id="grid"
+              class="grid"
+            >
+              <div class="welcome-screen">
+                <h2>ArroSpace AI Explorer</h2>
+
+                <p>
+                  Select a dataset to explore manifold
+                  structures, tensor slices and metadata.
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </section>
     </main>
-    <script type="module" src="./app.js"></script>
+
+    <script
+      type="module"
+      src="./app.js"
+    ></script>
   </body>
 </html>

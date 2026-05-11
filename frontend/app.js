@@ -11,6 +11,7 @@ const state = {
   loading: false,
   exhausted: false,
   sliceMode: false,      // true when explicit slice spec is in use
+  spectralWeight: 0.5,
 };
 
 async function api(path) {
@@ -34,6 +35,7 @@ async function refreshHealth() {
 async function refreshDatasets() {
   const data = await api("/api/datasets");
   state.datasets = data.datasets;
+  $("#dataset-count").textContent = state.datasets.length;
   renderDatasetList();
 }
 
@@ -41,21 +43,47 @@ function renderDatasetList() {
   const ul = $("#dataset-list");
   ul.innerHTML = "";
   const f = $("#filter").value.toLowerCase();
+  let visibleCount = 0;
   for (const d of state.datasets) {
     if (f && !d.id.toLowerCase().includes(f)) continue;
+    visibleCount++;
     const li = document.createElement("li");
     li.dataset.id = d.id;
     if (state.selected && state.selected.id === d.id) li.classList.add("active");
     const idLine = document.createElement("div");
     idLine.textContent = d.id;
+    idLine.className = "ds-title";
     const meta = document.createElement("div");
     meta.className = "ds-shape";
-    meta.textContent = `${d.kind} · [${d.shape.join(",")}] · ${d.dtype || "—"}`;
+    meta.textContent = `[${d.shape.join(",")}] · ${d.dtype || "—"}`;
+
+    const badge = document.createElement("span");
+    badge.className = `ds-badge ${d.kind}`;
+    badge.textContent = d.kind;
+
     li.appendChild(idLine);
     li.appendChild(meta);
+    li.appendChild(badge);
     li.addEventListener("click", () => selectDataset(d));
     ul.appendChild(li);
+    if (visibleCount === 0) {
+  ul.innerHTML = `
+    <li class="empty-list">
+      No datasets found
+    </li>
+  `;
+}
+$("#filter-status").textContent =
+  f
+    ? `${visibleCount} result${visibleCount === 1 ? "" : "s"} for "${f}"`
+    : "All datasets";
   }
+}
+
+function resetMetrics() {
+  $("#metric-kind").textContent = "—";
+  $("#metric-shape").textContent = "—";
+  $("#metric-dtype").textContent = "—";
 }
 
 async function selectDataset(d) {
@@ -64,8 +92,20 @@ async function selectDataset(d) {
   state.exhausted = false;
   state.sliceMode = false;
   $("#dataset-title").textContent = d.id;
+  $("#copy-id-btn").disabled = false;
+  $("#copy-id-btn").disabled = false;
+  $("#metric-kind").textContent = d.kind;
+  $("#metric-shape").textContent =
+    `[${d.shape.join(", ")}]`;
+  $("#metric-dtype").textContent =
+    d.dtype || "—";
   $("#slice-input").value = "";
-  $("#grid").innerHTML = "";
+  $("#grid").innerHTML = `
+  <div class="loading-screen">
+    <div class="loader"></div>
+    <p>Loading dataset...</p>
+  </div>
+`;
   $("#data-status").textContent = "loading…";
   renderDatasetList();
   try {
@@ -120,7 +160,13 @@ async function loadNextPage() {
       $("#data-status").textContent = `loaded ${state.nextOffset} of ${page.total}`;
     }
   } catch (e) {
-    $("#data-status").textContent = `error: ${e.message}`;
+    $("#data-status").textContent = "";
+    $("#grid").innerHTML = `
+      <div class="error-screen">
+        <h2>Unable to load data</h2>
+        <p>${e.message}</p>
+      </div>
+    `;
   } finally {
     state.loading = false;
   }
@@ -145,7 +191,13 @@ async function applySlice() {
     appendRows(r.data);
     $("#data-status").textContent = `slice ${spec} → shape [${r.out_shape.join(",")}]`;
   } catch (e) {
-    $("#data-status").textContent = `error: ${e.message}`;
+    $("#data-status").textContent = "";
+    $("#grid").innerHTML = `
+      <div class="error-screen">
+        <h2>Unable to load data</h2>
+        <p>${e.message}</p>
+      </div>
+    `;
   }
 }
 
@@ -216,8 +268,39 @@ function attachInfiniteScroll() {
   });
 }
 
+async function runSearch() {
+  const query = $("#filter").value.trim();
+
+  if (!query) {
+    $("#search-mode-label").textContent = "Local filter";
+    $("#search-hint").textContent =
+      "Type a query to filter datasets. Spectral weighting is ready for ArrowSpace search.";
+
+    renderDatasetList();
+    return;
+  }
+
+  $("#search-mode-label").textContent =
+    `Spectral ${state.spectralWeight.toFixed(2)}`;
+
+  $("#search-hint").textContent =
+    `Filtering "${query}" with spectral-topological weight ${state.spectralWeight.toFixed(2)}.`;
+
+  renderDatasetList();
+}
+
 function wireControls() {
-  $("#filter").addEventListener("input", renderDatasetList);
+  $("#filter").addEventListener("input", runSearch);
+  $("#refresh-btn").addEventListener("click", async () => {
+    $("#refresh-btn").textContent = "⟳";
+
+    resetMetrics();
+
+    await refreshHealth();
+    await refreshDatasets();
+
+    $("#refresh-btn").textContent = "↻";
+  });
   $("#apply-slice").addEventListener("click", applySlice);
   $("#reset-slice").addEventListener("click", () => {
     $("#slice-input").value = "";
@@ -225,6 +308,23 @@ function wireControls() {
   });
   $("#slice-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") applySlice();
+  });
+
+  $("#copy-id-btn").addEventListener("click", async () => {
+    if (!state.selected) return;
+    await navigator.clipboard.writeText(state.selected.id);
+    $("#copy-id-btn").textContent = "Copied!";
+    setTimeout(() => {
+      $("#copy-id-btn").textContent = "Copy Dataset ID";
+    }, 1200);
+  });
+
+  $("#spectral-slider").addEventListener("input", (e) => {
+    state.spectralWeight = Number(e.target.value);
+
+    $("#spectral-value").textContent =
+      state.spectralWeight.toFixed(2);
+      runSearch();
   });
 }
 
