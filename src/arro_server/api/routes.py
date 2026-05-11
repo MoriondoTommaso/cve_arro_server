@@ -51,7 +51,7 @@ from ..arrowspace_adapter import load as load_arrowspace
 from ..errors import DatasetNotSliceable, InvalidSlice, OptionalDependencyMissing
 from ..search_engine import PromptSearchEngine
 from ..settings import Settings, get_settings
-from ..slicing import enforce_window_budget, parse_slice, trailing_product
+from ..slicing import ResolvedSlice, enforce_window_budget, parse_slice, trailing_product
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
 from .schemas import (
@@ -77,6 +77,29 @@ def _registry() -> StorageRegistry:
 
 def _arrowspace() -> ArrowSpaceAdapter:
     return load_arrowspace()
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _read_rows(h, offset: int, nrows: int) -> np.ndarray:
+    """Read *nrows* rows starting at *offset* from any DatasetHandle.
+
+    Uses read_window(ResolvedSlice) which is the only public read surface
+    on _ZarrArrayHandle.  Works for any 2-D or N-D array handle.
+    """
+    shape = h.summary.shape
+    ndim  = len(shape)
+    end   = min(offset + nrows, shape[0])
+    # Build a tuple of Python slice objects: first axis is the row range,
+    # all remaining axes are unconstrained.
+    slices = tuple(
+        slice(offset, end) if i == 0 else slice(None)
+        for i in range(ndim)
+    )
+    rs = ResolvedSlice(selectors=slices, shape=shape, ndim=ndim)
+    return h.read_window(rs)
 
 
 # ---------------------------------------------------------------------------
@@ -137,22 +160,17 @@ def dataset_metadata(
     reg: StorageRegistry = Depends(_registry),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    # _ZarrArrayHandle may not expose .attrs — fall back to empty dict safely
-    attrs = getattr(h, "attrs", None)
-    if attrs is None:
-        try:
-            attrs = dict(h.array.attrs)  # zarr v2/v3 array attrs
-        except Exception:
-            attrs = {}
+    # attrs is stored in h.metadata by ZarrFilesystemBackend.open()
+    attrs = h.metadata.get("attrs", {})
     return {
-        "id": h.summary.dataset_id,
-        "root": h.summary.root,
-        "path": h.summary.path,
-        "kind": h.summary.kind,
-        "shape": list(h.summary.shape),
-        "dtype": h.summary.dtype,
+        "id":     h.summary.dataset_id,
+        "root":   h.summary.root,
+        "path":   h.summary.path,
+        "kind":   h.summary.kind,
+        "shape":  list(h.summary.shape),
+        "dtype":  h.summary.dtype,
         "chunks": list(h.summary.chunks) if h.summary.chunks else None,
-        "attrs": attrs,
+        "attrs":  attrs,
     }
 
 
@@ -165,10 +183,16 @@ def dataset_data(
     settings: Settings   = Depends(get_settings),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
+    shape = h.summary.shape
+    if not shape:
+        raise HTTPException(status_code=422, detail="Dataset is a group, not an array.")
+    nrows = shape[0]
     if limit < 0:
         limit = settings.default_window
-    limit = min(limit, settings.max_window)
-    arr   = h.read(offset=offset, limit=limit)
+    limit = min(limit, settings.max_window, nrows - offset)
+    if limit <= 0:
+        return array_to_payload(np.empty((0,) + shape[1:], dtype=h.summary.dtype), offset=offset)
+    arr = _read_rows(h, offset, limit)
     return array_to_payload(arr, offset=offset)
 
 
@@ -179,20 +203,23 @@ def dataset_slice(
     reg: StorageRegistry = Depends(_registry),
     settings: Settings   = Depends(get_settings),
 ) -> dict[str, Any]:
-    h   = reg.open(dataset_id)
+    h     = reg.open(dataset_id)
+    shape = h.summary.shape
+    ndim  = len(shape)
     try:
-        slices = parse_slice(spec, h.ndim)
+        slices = parse_slice(spec, ndim)
     except InvalidSlice as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         slices = enforce_window_budget(
-            slices, h.shape, h.ndim,
+            slices, shape, ndim,
             max_rows=settings.max_window,
             trailing_product=trailing_product,
         )
     except DatasetNotSliceable as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    arr = h.slice(slices)
+    rs  = ResolvedSlice(selectors=slices, shape=shape, ndim=ndim)
+    arr = h.read_window(rs)
     return array_to_payload(arr, offset=0)
 
 
@@ -203,8 +230,11 @@ def dataset_stats(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
+    fs_path = h.fs_path
+    if fs_path is None:
+        return {}
     try:
-        return adapter.sidecar_stats(h.path)
+        return adapter.sidecar_stats(fs_path)
     except FileNotFoundError:
         return {}
 
@@ -216,8 +246,11 @@ def dataset_manifold(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
+    fs_path = h.fs_path
+    if fs_path is None:
+        return {}
     try:
-        return adapter.sidecar_manifold(h.path)
+        return adapter.sidecar_manifold(fs_path)
     except FileNotFoundError:
         return {}
 
@@ -231,7 +264,10 @@ def dataset_keyword_search(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
-    results = adapter.sidecar_search(h.path, q, limit=limit)
+    fs_path = h.fs_path
+    if fs_path is None:
+        raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
+    results = adapter.sidecar_search(fs_path, q, limit=limit)
     return {"query": q, "results": results}
 
 
@@ -250,23 +286,35 @@ def build_index(
 
     We resolve each argument from the registry handle and settings:
       - dataset_id   : the URL path parameter (string key used by the cache)
-      - array        : full float64 matrix read from Zarr (all rows)
+      - array        : full float64 matrix read from Zarr via h._arr[:]
       - index_store  : first resolved data root on disk, used as persistence dir
       - graph_params : from request body, falling back to DEFAULT_GRAPH_PARAMS
     """
     h            = reg.open(dataset_id)
     graph_params = (body.graph_params if body else None) or DEFAULT_GRAPH_PARAMS
 
-    # Read the full array from Zarr (float64 required by arrowspace)
-    array = h.read(offset=0, limit=h.shape[0]).astype(np.float64)
+    # Access the raw zarr array directly — it is the only zero-copy path.
+    # _ZarrArrayHandle stores it at ._arr; the public read_window() API
+    # requires a ResolvedSlice and adds unnecessary overhead for a full read.
+    raw_arr = getattr(h, "_arr", None)
+    if raw_arr is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Dataset does not expose a raw array (not a Zarr array handle).",
+        )
+    try:
+        array = np.asarray(raw_arr[:], dtype=np.float64)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read array: {exc}") from exc
 
     # Resolve a writable index_store directory.
-    # Use the first configured data root; fall back to a sibling of the Zarr path.
     roots = list(settings.resolved_roots.values())
     if roots:
         index_store = Path(roots[0]).parent / "_arrowspace_index"
+    elif h.fs_path is not None:
+        index_store = h.fs_path.parent / "_arrowspace_index"
     else:
-        index_store = Path(h.summary.path).parent / "_arrowspace_index"
+        index_store = Path(".") / "_arrowspace_index"
     index_store.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -297,8 +345,11 @@ def dataset_lambdas(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
+    fs_path = h.fs_path
+    if fs_path is None:
+        raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
     try:
-        return adapter.lambdas(h.path)
+        return adapter.lambdas(fs_path)
     except (FileNotFoundError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -310,8 +361,11 @@ def dataset_graph_laplacian(
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
     h = reg.open(dataset_id)
+    fs_path = h.fs_path
+    if fs_path is None:
+        raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
     try:
-        return adapter.graph_laplacian_info(h.path)
+        return adapter.graph_laplacian_info(fs_path)
     except (FileNotFoundError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -350,8 +404,8 @@ def spectral_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h       = reg.open(dataset_id)
-    q_dict  = {"vector": body.vector, "tau": body.tau}
+    h      = reg.open(dataset_id)
+    q_dict = {"vector": body.vector, "tau": body.tau}
     try:
         return adapter.search(h.summary.dataset_id, q_dict)
     except OptionalDependencyMissing:
@@ -365,8 +419,8 @@ def energy_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h       = reg.open(dataset_id)
-    q_dict  = {"vector": body.vector, "k": body.k}
+    h      = reg.open(dataset_id)
+    q_dict = {"vector": body.vector, "k": body.k}
     try:
         return adapter.search_energy(h.summary.dataset_id, q_dict)
     except OptionalDependencyMissing:
@@ -380,8 +434,8 @@ def hybrid_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h       = reg.open(dataset_id)
-    q_dict  = {"vector": body.vector, "alpha": body.alpha}
+    h      = reg.open(dataset_id)
+    q_dict = {"vector": body.vector, "alpha": body.alpha}
     try:
         return adapter.search_hybrid(h.summary.dataset_id, q_dict)
     except OptionalDependencyMissing:
@@ -395,8 +449,8 @@ def linear_search(
     reg: StorageRegistry = Depends(_registry),
     adapter: ArrowSpaceAdapter = Depends(_arrowspace),
 ) -> dict[str, Any]:
-    h       = reg.open(dataset_id)
-    q_dict  = {"vector": body.vector, "k": body.k}
+    h      = reg.open(dataset_id)
+    q_dict = {"vector": body.vector, "k": body.k}
     try:
         return adapter.search_linear_sorted(h.summary.dataset_id, q_dict)
     except OptionalDependencyMissing:
