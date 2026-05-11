@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Keys that belong to the ArrowSpaceBuilder graph_params dict.
 # If an incoming IndexBuildRequest body contains ONLY these keys (flat),
@@ -87,18 +87,47 @@ class NLSearchRequest(BaseModel):
 
 
 class PromptSearchResult(BaseModel):
-    """A single result returned by /prompts/search or /prompts/nl_search."""
+    """A single result returned by /prompts/search or /prompts/nl_search.
+
+    The dataset stores the prompt text in the ``content`` field.
+    ``body`` is kept as a read-only alias so older clients keep working.
+    """
 
     id: str
     title: str | None = None
+    # Primary field — matches the 'content' key in dataset.json
+    content: str | None = None
+    # Alias for backward compat — returns the same value as content
     body: str | None = None
     tags: list[str] = Field(default_factory=list)
     upvotes: int | None = None
     views: int | None = None
     author_reputation: float | None = None
+    version: int | None = None
+    fork_count: int | None = None
+    likes: int | None = None
+    downvotes: int | None = None
+    uses: int | None = None
+    created_at: str | None = None
+    category: str | None = None
+    subcategory: str | None = None
+    has_placeholders: bool | None = None
+    placeholders: list[str] = Field(default_factory=list)
+    difficulty: str | None = None
+    language: str | None = None
+    target_model: str | None = None
     _score: float = 0.0
     _salience: float = 0.0
     _tau: float = 0.0
+
+    @model_validator(mode="after")
+    def _sync_body_content(self) -> "PromptSearchResult":
+        """Keep body and content in sync — whichever is set populates the other."""
+        if self.content is not None and self.body is None:
+            self.body = self.content
+        elif self.body is not None and self.content is None:
+            self.content = self.body
+        return self
 
     model_config = {"extra": "allow"}  # pass-through any extra fields from dataset
 
