@@ -1,9 +1,8 @@
 """EmbedderService — NL query -> 768-d nomic embedding.
 
-Wraps sentence-transformers (nomic-ai/nomic-embed-text-v1.5, SDPA backend)
-and exposes a single .embed(text) method that returns a L2-normalised
-768-dimensional float64 numpy array ready to pass straight to
-PromptSearchEngine.search().
+Wraps sentence-transformers (nomic-ai/nomic-embed-text-v1.5) and exposes a
+single .embed(text) method that returns a L2-normalised 768-dimensional
+float64 numpy array ready to pass straight to PromptSearchEngine.search().
 
 The singleton is loaded once at application startup via the FastAPI lifespan
 and cached for the lifetime of the process.
@@ -11,14 +10,13 @@ and cached for the lifetime of the process.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 
 import numpy as np
 
 log = logging.getLogger(__name__)
 
 _DIM = 768
-# nomic requires this trust_remote_code=True flag and the task prefix.
+# nomic requires this task prefix for query-side embeddings.
 _TASK_PREFIX = "search_query: "
 
 
@@ -44,10 +42,13 @@ class EmbedderService:
             ) from exc
 
         log.info("Loading embedder model: %s", model_name)
+        # No `backend` kwarg — sentence-transformers picks the best available
+        # backend automatically (torch on MPS/CUDA/CPU).  The `sdpa` string was
+        # only accepted by ST >= 3.x compiled with Flash Attention; omitting it
+        # is safe across all supported versions.
         self._model = SentenceTransformer(
             model_name,
             trust_remote_code=True,
-            backend="sdpa",  # scaled-dot-product attention — faster, same results
         )
         self.model_name = model_name
         self.dim = _DIM
