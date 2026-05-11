@@ -199,23 +199,11 @@ source = { editable = "." }
 dependencies = [
     { name = "arrowspace" },
     { name = "arrowspace-tuner" },
-    { name = "einops" },
     { name = "fastapi" },
-    { name = "google-genai" },
-    { name = "ipykernel" },
-    { name = "matplotlib" },
-    { name = "nbformat" },
     { name = "numpy" },
-    { name = "pandas" },
-    { name = "plotly" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "requests" },
-    { name = "sentence-transformers" },
-    { name = "tinydb" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "torchvision" },
+    { name = "scikit-learn" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "zarr" },
 ]
@@ -223,9 +211,6 @@ dependencies = [
 [package.optional-dependencies]
 arrow = [
     { name = "pyarrow" },
-]
-arrowspace = [
-    { name = "arrowspace" },
 ]
 dev = [
     { name = "fastapi", extra = ["standard"] },
@@ -236,6 +221,47 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+full = [
+    { name = "einops" },
+    { name = "fastapi", extra = ["standard"] },
+    { name = "fsspec" },
+    { name = "google-genai" },
+    { name = "httpx" },
+    { name = "ipykernel" },
+    { name = "matplotlib" },
+    { name = "nbformat" },
+    { name = "pandas" },
+    { name = "plotly" },
+    { name = "pre-commit" },
+    { name = "pyarrow" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "requests" },
+    { name = "ruff" },
+    { name = "sentence-transformers" },
+    { name = "tinydb" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "torchvision" },
+    { name = "zarr" },
+]
+nlp = [
+    { name = "sentence-transformers" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "torchvision" },
+]
+notebook = [
+    { name = "einops" },
+    { name = "google-genai" },
+    { name = "ipykernel" },
+    { name = "matplotlib" },
+    { name = "nbformat" },
+    { name = "pandas" },
+    { name = "plotly" },
+    { name = "requests" },
+    { name = "tinydb" },
+]
 zarr = [
     { name = "fsspec" },
     { name = "zarr" },
@@ -243,40 +269,41 @@ zarr = [
 
 [package.metadata]
 requires-dist = [
+    { name = "arro-server", extras = ["zarr", "arrow", "nlp", "notebook", "dev"], marker = "extra == 'full'" },
     { name = "arrowspace", specifier = ">=0.26.2" },
-    { name = "arrowspace", marker = "extra == 'arrowspace'" },
     { name = "arrowspace-tuner", specifier = ">=0.3.1" },
-    { name = "einops", specifier = ">=0.8.2" },
-    { name = "fastapi", specifier = ">=0.110" },
-    { name = "fastapi", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.110" },
+    { name = "einops", marker = "extra == 'notebook'", specifier = ">=0.7" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.115" },
     { name = "fsspec", marker = "extra == 'dev'", specifier = ">=2024.2" },
     { name = "fsspec", marker = "extra == 'zarr'", specifier = ">=2024.2" },
-    { name = "google-genai", specifier = ">=1.70.0" },
+    { name = "google-genai", marker = "extra == 'notebook'", specifier = ">=1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "ipykernel", specifier = ">=7.2.0" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "nbformat", specifier = ">=5.10.4" },
+    { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=6.0" },
+    { name = "matplotlib", marker = "extra == 'notebook'", specifier = ">=3.8" },
+    { name = "nbformat", marker = "extra == 'notebook'", specifier = ">=5.9" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "pandas", specifier = ">=3.0.1" },
-    { name = "plotly", specifier = ">=6.7.0" },
+    { name = "pandas", marker = "extra == 'notebook'", specifier = ">=2.0" },
+    { name = "plotly", marker = "extra == 'notebook'", specifier = ">=5.0" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyarrow", marker = "extra == 'arrow'", specifier = ">=15.0" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "requests", specifier = ">=2.33.1" },
+    { name = "requests", marker = "extra == 'notebook'", specifier = ">=2.31" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "sentence-transformers", specifier = ">=5.3.0" },
-    { name = "tinydb", specifier = ">=4.8.2" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "torchvision" },
+    { name = "scikit-learn", specifier = ">=1.4" },
+    { name = "sentence-transformers", marker = "extra == 'nlp'", specifier = ">=5.3.0" },
+    { name = "tinydb", marker = "extra == 'notebook'", specifier = ">=4.8" },
+    { name = "torch", marker = "extra == 'nlp'", specifier = ">=2.2" },
+    { name = "torchaudio", marker = "extra == 'nlp'" },
+    { name = "torchvision", marker = "extra == 'nlp'" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.27" },
     { name = "zarr", specifier = ">=3.0" },
     { name = "zarr", marker = "extra == 'zarr'", specifier = ">=3.0" },
 ]
-provides-extras = ["zarr", "arrow", "arrowspace", "dev"]
+provides-extras = ["zarr", "arrow", "nlp", "notebook", "dev", "full"]
 
 [[package]]
 name = "arrowspace"
