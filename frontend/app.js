@@ -238,20 +238,30 @@ async function loadMetadata(d) {
 }
 
 function renderManifold(manifold) {
+  const hasEmbedding =
+    Array.isArray(manifold.embedding) &&
+    Array.isArray(manifold.embedding[0]);
+
+  if (!hasEmbedding) {
+    $("#manifold-out").innerHTML = `
+      <div class="signal-card">
+        <span class="signal-label">Status</span>
+        <strong>No embedding projection available</strong>
+      </div>
+
+      <div class="signal-card">
+        <span class="signal-label">Source</span>
+        <strong>${manifold.source ?? manifold.backend ?? "local"}</strong>
+      </div>
+    `;
+    return;
+  }
+
   const method = manifold.method ?? manifold.kind ?? "Unknown";
   const embeddingDim = manifold.embedding_dim ?? manifold.intrinsic_dim ?? "—";
-  const embeddingPoints =
-    Array.isArray(manifold.embedding)
-      ? manifold.embedding.length
-      : "—";
-
-  const embeddingAxes =
-    Array.isArray(manifold.embedding?.[0])
-      ? manifold.embedding[0].length
-      : "—";
-
-  const source =
-    manifold.source ?? manifold.backend ?? "local";
+  const embeddingPoints = manifold.embedding.length;
+  const embeddingAxes = manifold.embedding[0].length;
+  const source = manifold.source ?? manifold.backend ?? "local";
 
   $("#manifold-out").innerHTML = `
     <div class="signal-card">
@@ -295,6 +305,7 @@ function renderManifold(manifold) {
       </div>
     </div>
   `;
+
   renderManifoldPlot(manifold);
 }
 
@@ -481,12 +492,10 @@ async function loadManifold(d) {
   } catch (e) {
     console.warn("Manifold unavailable:", e);
 
-    $("#manifold-out").innerHTML = `
-      <div class="signal-card">
-        <span class="signal-label">Status</span>
-        <strong>Unavailable</strong>
-      </div>
-    `;
+    renderManifold({
+      source: "local",
+      embedding: null,
+    });
   }
 }
 
@@ -520,146 +529,139 @@ function renderLambdaBars(lambdas) {
 }
 
 function renderArrowSpaceSignals(stats) {
-  const gl =
-    stats.gl ??
-    stats.GL ??
-    stats.global_laplacian ??
-    stats.graph_laplacian ??
-    null;
+  console.log("ArrowSpace stats received:", stats);
 
-  const lambdas =
-    stats.lambdas_distribution ??
-    stats.lambda_distribution ??
-    stats.lambdas ??
-    stats.eigenvalues ??
-    null;
+  const glNodes = stats.gl_nodes ?? "—";
 
-  if (gl == null && lambdas == null) {
-    $("#signal-gl").innerHTML = `
-      <div class="signal-empty">
-        No graph signal available for this dataset
-      </div>
-    `;
+  const glShape = Array.isArray(stats.gl_shape)
+    ? stats.gl_shape.join(" × ")
+    : "—";
 
+  const lambdas = Array.isArray(stats.lambdas_sorted)
+    ? stats.lambdas_sorted
+    : [];
+
+  $("#signal-gl").innerHTML = `
+    <div class="signal-row">
+      <span>Nodes</span>
+      <strong>${glNodes}</strong>
+    </div>
+
+    <div class="signal-row">
+      <span>Graph Shape</span>
+      <strong>${glShape}</strong>
+    </div>
+  `;
+
+  if (lambdas.length > 0) {
+    const lambdaValues = lambdas.map((item) =>
+      Array.isArray(item) ? Number(item[0]) : Number(item)
+    );
+
+    $("#signal-lambda").innerHTML = renderLambdaBars(lambdaValues);
+  } else {
     $("#signal-lambda").innerHTML = `
       <div class="signal-empty">
         No eigenvalue distribution available
       </div>
     `;
-
-    return;
-  }
-
-  if (gl == null) {
-    $("#signal-gl").innerHTML = `
-      <div class="signal-empty">No graph signal available</div>
-    `;
-  } else {
-    $("#signal-gl").innerHTML = `
-      <div class="signal-metric">
-        <span>Nodes</span>
-        <strong>${gl.nodes}</strong>
-      </div>
-
-      <div class="signal-metric">
-        <span>Graph Shape</span>
-        <strong>${gl.shape.join(" × ")}</strong>
-      </div>
-    `;
-  }
-
-  if (lambdas == null) {
-    $("#signal-lambda").innerHTML = `
-      <div class="signal-empty">No eigenvalue distribution available</div>
-    `;
-  } else {
-    $("#signal-lambda").innerHTML = renderLambdaBars(lambdas);
   }
 }
 
 
 function renderStats(stats) {
-  const hasGraphStats =
-    stats.gl ||
-    stats.lambdas_distribution ||
-    stats.spectral_topology_score;
-
-  if (!hasGraphStats) {
-    $("#stats-out").innerHTML = `
-      <div class="signal-card">
-        <span class="signal-label">Mean</span>
-        <strong>${formatCell(stats.mean ?? "—")}</strong>
-      </div>
-
-      <div class="signal-card">
-        <span class="signal-label">Std</span>
-        <strong>${formatCell(stats.std ?? "—")}</strong>
-      </div>
-
-      <div class="signal-card">
-        <span class="signal-label">Min</span>
-        <strong>${formatCell(stats.min ?? "—")}</strong>
-      </div>
-
-      <div class="signal-card">
-        <span class="signal-label">Max</span>
-        <strong>${formatCell(stats.max ?? "—")}</strong>
-      </div>
-    `;
-    return;
-  }
-
-  const glNodes = stats.gl?.nodes ?? "—";
-
-  const glShape =
-    stats.gl?.shape
-      ? `${stats.gl.shape[0]} × ${stats.gl.shape[1]}`
-      : "—";
-
-  const lambdaCount = stats.lambdas_distribution?.length ?? 0;
-  const topologyScore = stats.spectral_topology_score ?? "—";
-
   $("#stats-out").innerHTML = `
     <div class="signal-card">
+      <span class="signal-label">Items</span>
+      <strong>${stats.nitems ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Features</span>
+      <strong>${stats.nfeatures ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Clusters</span>
+      <strong>${stats.nclusters ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
       <span class="signal-label">GL Nodes</span>
-      <strong>${glNodes}</strong>
+      <strong>${stats.gl_nodes ?? "—"}</strong>
     </div>
 
     <div class="signal-card">
-      <span class="signal-label">Graph Shape</span>
-      <strong>${glShape}</strong>
-    </div>
-
-    <div class="signal-card">
-      <span class="signal-label">Eigenvalues</span>
-      <strong>${lambdaCount}</strong>
-    </div>
-
-    <div class="signal-card">
-      <span class="signal-label">Topology Score</span>
-      <strong>${topologyScore}</strong>
+      <span class="signal-label">GL Shape</span>
+      <strong>${
+        Array.isArray(stats.gl_shape)
+          ? stats.gl_shape.join(" × ")
+          : "—"
+      }</strong>
     </div>
   `;
 }
 
 
 async function loadStats(d) {
+  let stats = {
+    nitems: Array.isArray(d.shape) ? d.shape[0] : "—",
+    nfeatures: Array.isArray(d.shape) ? d.shape[1] : "—",
+    nclusters: "—",
+    gl_nodes: Array.isArray(d.shape) ? d.shape[0] : "—",
+    gl_shape: Array.isArray(d.shape) ? [d.shape[0], d.shape[0]] : null,
+    lambdas_sorted: [],
+  };
+
   try {
-    const s = await api(`/api/datasets/${encodeURI(d.id)}/stats`);
+    const backendStats = await api(
+      `/api/datasets/${encodeURIComponent(d.id)}/stats`
+    );
 
-    renderStats(s);
-    renderArrowSpaceSignals(s);
-
+    stats = {
+      ...stats,
+      ...backendStats,
+    };
   } catch (e) {
-    $("#stats-out").innerHTML = `
-      <div class="signal-card">
-        <span class="signal-label">Status</span>
-        <strong>Unavailable</strong>
-      </div>
-    `;
+    console.warn("Stats endpoint unavailable, trying index fallback:", e);
 
-    renderArrowSpaceSignals({});
+    try {
+      const indexStats = await api(
+        `/api/datasets/${encodeURIComponent(d.id)}/index`,
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        }
+      );
+
+      stats = {
+        ...stats,
+        ...indexStats,
+        gl_nodes: indexStats.nitems ?? stats.gl_nodes,
+        gl_shape: indexStats.nitems
+          ? [indexStats.nitems, indexStats.nitems]
+          : stats.gl_shape,
+      };
+    } catch (indexError) {
+      console.warn("Index fallback unavailable:", indexError);
+    }
   }
+
+  try {
+    const lambdas = await api(
+      `/api/datasets/${encodeURIComponent(d.id)}/lambdas`
+    );
+
+    stats = {
+      ...stats,
+      ...lambdas,
+    };
+  } catch (e) {
+    console.warn("Lambdas unavailable:", e);
+  }
+
+  renderStats(stats);
+  renderArrowSpaceSignals(stats);
 }
 
 function rowsCountFromPage(page) {
@@ -832,7 +834,8 @@ function appendRows(payload) {
 
   const firstRow = Array.isArray(rows[0]) ? rows[0] : [rows[0]];
 
-  for (let c = 0; c < firstRow.length; c++) {
+  const maxPreviewCols = 20;
+  for (let c = 0; c < Math.min(firstRow.length, maxPreviewCols); c++) {
     const th = document.createElement("th");
     th.textContent = c;
     tr.appendChild(th);
@@ -853,7 +856,7 @@ function appendRows(payload) {
 
     const cells = Array.isArray(row) ? row : [row];
 
-    cells.forEach((v) => {
+    cells.slice(0, maxPreviewCols).forEach((v) => {
       const td = document.createElement("td");
 
       if (Array.isArray(v)) {
