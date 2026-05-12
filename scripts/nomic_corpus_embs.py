@@ -28,7 +28,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from tinydb import TinyDB, Query
 
-# ── paths ──────────────────────────────────────────────────────────────────────
+
 ROOT        = Path("/content/drive/MyDrive/prompt_kaban")
 SOURCE_DB   = ROOT / "db.json"
 OUTPUT_DIR  = ROOT / "results" 
@@ -39,7 +39,6 @@ BATCH_SIZE = 256
 ALL_DIMS   = [768, 512, 256]
 
 
-# ── load records ───────────────────────────────────────────────────────────────
 def load_records(db_path: Path) -> tuple[list[str], list[str]]:
     """
     Opens the source TinyDB, validates every record, deduplicates,
@@ -81,7 +80,6 @@ def load_records(db_path: Path) -> tuple[list[str], list[str]]:
     return ids, texts
 
 
-# ── encoding ───────────────────────────────────────────────────────────────────
 def encode_corpus(model: SentenceTransformer, texts: list[str]) -> np.ndarray:
     """
     Encodes all texts in batches → unnormalised float32 (N, 768).
@@ -105,7 +103,6 @@ def matryoshka_slice(vecs: np.ndarray, d: int) -> np.ndarray:
     return vecs[:, :d].astype(np.float32, copy=True)
 
 
-# ── save + register ────────────────────────────────────────────────────────────
 def save_and_register(
     ids: list[str],
     raw_vecs: np.ndarray,
@@ -170,7 +167,6 @@ def save_and_register(
     print(f"  ✓  Registry updated: {n:,} records for dim={d}")
 
 
-# ── CLI + main ─────────────────────────────────────────────────────────────────
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Generate Matryoshka embeddings from TinyDB doc_strings."
@@ -201,7 +197,7 @@ def main() -> None:
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── 1. load ───────────────────────────────────────────────────────────────
+    # load
     print(f"\n{'━'*60}")
     print(f"  SOURCE DB : {src_db}")
     print(f"  OUTPUT DIR: {out_dir}")
@@ -216,17 +212,17 @@ def main() -> None:
     print(f"    id   = {ids[0]!r}")
     print(f"    text = {texts[0][:140]!r}\n")
 
-    # ── 2. model ──────────────────────────────────────────────────────────────
+    # model 
     print(f"Loading {MODEL_ID} ...", flush=True)
     model = SentenceTransformer(MODEL_ID, trust_remote_code=True)
     print("  Model ready.\n")
 
-    # ── 3. encode once at full 768d ───────────────────────────────────────────
+    # encode once at full 768d 
     print("Encoding corpus at full 768d...", flush=True)
     raw_vecs = encode_corpus(model, texts)   # (N, 768)
     print()
 
-    # ── 4. slice + save + register per dim ────────────────────────────────────
+    # slice + save + register per dim
     print(f"Saving embeddings & updating registry...\n", flush=True)
     registry = TinyDB(out_dir / "embeddings_registry.json")
 
@@ -237,7 +233,7 @@ def main() -> None:
 
     registry.close()
 
-    # ── 5. final summary ──────────────────────────────────────────────────────
+    # final summary 
     print(f"{'━'*60}")
     print(f"  All done.")
     print(f"  Registry : {out_dir / 'embeddings_registry.json'}")

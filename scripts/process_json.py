@@ -11,10 +11,6 @@ ROOT = Path(__file__).parent.parent
 DATASET_PATH = ROOT / "data" / "corpus_embs" / "dataset.json"
 
 
-
-
-# ── helpers ───────────────────────────────────────────────────────────────────
-
 def clean(text: str) -> str:
     """Remove {{placeholder}} tokens, collapse whitespace."""
     return re.sub(r"\s+", " ", re.sub(r"\{\{[^}]+\}\}", "", text)).strip()
