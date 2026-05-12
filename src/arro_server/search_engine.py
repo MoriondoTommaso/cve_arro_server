@@ -219,7 +219,7 @@ class PromptSearchEngine:
                 "score":     float(combined[pool_i]),
                 "sim":       float(raw_sims[pool_i]),
                 "content":   item.get("content", item.get("text", "")),
-                "_salience": float(sal_scores[pool_i]),
+                "salience": float(sal_scores[pool_i]),
                 "tags":      item.get("tags", []),
                 "upvotes":   item.get("upvotes", 0),
                 "likes":     item.get("likes", 0),
