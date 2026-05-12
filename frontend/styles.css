@@ -1542,3 +1542,21 @@ td.row-idx {
   width: 300px;
   height: 300px;
 }
+
+.ds-score {
+  width: fit-content;
+  margin-top: 4px;
+  padding: 3px 8px;
+
+  border-radius: 999px;
+
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+
+  color: #d8cbff;
+
+  background: rgba(124,92,255,0.12);
+  border: 1px solid rgba(124,92,255,0.25);
+}

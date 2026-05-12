@@ -12,14 +12,27 @@ const state = {
   exhausted: false,
   sliceMode: false,      // true when explicit slice spec is in use
   spectralWeight: 0.5,
+  searchQuery: "",
+  rankedDatasetIds: null,
+  searchTimer: null,
   tensorData: null,
   tensorColorMode: "grayscale",
   tensorPlayTimer: null,
 };
 
-async function api(path) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
+  }
+
   return res.json();
 }
 
@@ -47,7 +60,19 @@ function renderDatasetList() {
   ul.innerHTML = "";
   const f = $("#filter").value.toLowerCase();
   let visibleCount = 0;
-  for (const d of state.datasets) {
+  const datasetsToRender = state.rankedDatasetIds
+    ? [...state.datasets].sort((a, b) => {
+        const aRank = state.rankedDatasetIds.indexOf(a.id);
+        const bRank = state.rankedDatasetIds.indexOf(b.id);
+
+        return (
+          (aRank === -1 ? Number.MAX_SAFE_INTEGER : aRank) -
+          (bRank === -1 ? Number.MAX_SAFE_INTEGER : bRank)
+        );
+      })
+    : state.datasets;
+
+  for (const d of datasetsToRender) {
     if (f && !d.id.toLowerCase().includes(f)) continue;
     visibleCount++;
     const li = document.createElement("li");
@@ -64,9 +89,22 @@ function renderDatasetList() {
     badge.className = `ds-badge ${d.kind}`;
     badge.textContent = d.kind;
 
+    const scoreBadge = document.createElement("span");
+    scoreBadge.className = "ds-score";
+
+    if (state.rankedDatasetIds) {
+      const rank = state.rankedDatasetIds.indexOf(d.id);
+
+      scoreBadge.textContent =
+        rank >= 0 ? `rank #${rank + 1}` : "";
+    }
+
     li.appendChild(idLine);
     li.appendChild(meta);
     li.appendChild(badge);
+    if (scoreBadge.textContent) {
+      li.appendChild(scoreBadge);
+    }
     li.addEventListener("click", () => selectDataset(d));
     ul.appendChild(li);
   }
@@ -409,17 +447,17 @@ function renderManifoldPlot(manifold) {
 
     if (!closest || bestDistance > 18) {
       tooltip.textContent = "Hover points";
-      return;
-      if (highlightCtx) {
-        highlightCtx.clearRect(
-          0,
-          0,
-          highlightCanvas.width,
-          highlightCanvas.height
-      );
-  }
 
-  return;
+    if (highlightCtx) {
+      highlightCtx.clearRect(
+        0,
+        0,
+        highlightCanvas.width,
+        highlightCanvas.height
+      );
+    }
+
+    return;
 }
 
     tooltip.textContent =
@@ -907,54 +945,55 @@ async function updateTensorSlice(sliceIndex) {
     $("#data-status").textContent = "tensor slice error";
   }
 
-  function renderTensorHistogram(values) {
-    const canvas = $("#tensor-histogram");
-    if (!canvas) return;
+}
 
-    const ctx = canvas.getContext("2d");
+function renderTensorHistogram(values) {
+  const canvas = $("#tensor-histogram");
+  if (!canvas) return;
 
-    canvas.width = 260;
-    canvas.height = 90;
+  const ctx = canvas.getContext("2d");
 
-    const finiteValues = values.map(Number).filter(Number.isFinite);
-    if (finiteValues.length === 0) return;
+  canvas.width = 260;
+  canvas.height = 90;
 
-    const min = Math.min(...finiteValues);
-    const max = Math.max(...finiteValues);
-    const range = max - min || 1;
+  const finiteValues = values.map(Number).filter(Number.isFinite);
+  if (finiteValues.length === 0) return;
 
-    const bins = 24;
-    const counts = Array(bins).fill(0);
+  const min = Math.min(...finiteValues);
+  const max = Math.max(...finiteValues);
+  const range = max - min || 1;
 
-    finiteValues.forEach((value) => {
-      const idx = Math.min(
-        bins - 1,
-        Math.floor(((value - min) / range) * bins)
-      );
+  const bins = 24;
+  const counts = Array(bins).fill(0);
 
-      counts[idx]++;
-    });
+  finiteValues.forEach((value) => {
+    const idx = Math.min(
+      bins - 1,
+      Math.floor(((value - min) / range) * bins)
+    );
 
-    const maxCount = Math.max(...counts) || 1;
+    counts[idx]++;
+  });
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const maxCount = Math.max(...counts) || 1;
 
-    const barWidth = canvas.width / bins;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    counts.forEach((count, i) => {
-      const barHeight =
-        (count / maxCount) * (canvas.height - 12);
+  const barWidth = canvas.width / bins;
 
-      ctx.fillStyle = "rgba(94,162,255,0.75)";
+  counts.forEach((count, i) => {
+    const barHeight =
+      (count / maxCount) * (canvas.height - 12);
 
-      ctx.fillRect(
-        i * barWidth,
-        canvas.height - barHeight,
-        Math.max(1, barWidth - 2),
-        barHeight
-      );
-    });
-  }
+    ctx.fillStyle = "rgba(94,162,255,0.75)";
+
+    ctx.fillRect(
+      i * barWidth,
+      canvas.height - barHeight,
+      Math.max(1, barWidth - 2),
+      barHeight
+    );
+  });
 }
 
 
@@ -1040,7 +1079,7 @@ function renderTensorSlice(matrix) {
   $("#tensor-max").textContent = max.toFixed(2);
   $("#tensor-mean").textContent = mean.toFixed(2);
 
-  // renderTensorHistogram(flatValues);
+  renderTensorHistogram(flatValues);
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -1151,10 +1190,44 @@ function attachInfiniteScroll() {
   });
 }
 
+function buildSearchVector(query) {
+  const vector = Array(8).fill(0);
+
+  for (let i = 0; i < query.length; i++) {
+    vector[i % vector.length] += query.charCodeAt(i) / 255;
+  }
+
+  return vector;
+}
+
+async function runHybridDatasetSearch(datasetId, query) {
+  const body = {
+    vector: buildSearchVector(query),
+    alpha: state.spectralWeight,
+    k: 10,
+  };
+
+  return api(`/api/datasets/${encodeURIComponent(datasetId)}/search/hybrid`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+async function buildDatasetIndex(datasetId) {
+  return api(`/api/datasets/${encodeURIComponent(datasetId)}/index`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 async function runSearch() {
-  const query = $("#filter").value.trim();
+  const query = $("#filter").value.trim().toLowerCase();
+
+  state.searchQuery = query;
 
   if (!query) {
+    state.rankedDatasetIds = null;
+
     $("#search-mode-label").textContent = "Local filter";
     $("#search-hint").textContent =
       "Type a query to filter datasets. Spectral weighting is ready for ArrowSpace search.";
@@ -1163,11 +1236,103 @@ async function runSearch() {
     return;
   }
 
+  const scored = state.datasets
+    .map((d) => {
+      const id = d.id.toLowerCase();
+      const dtype = String(d.dtype || "").toLowerCase();
+      const kind = String(d.kind || "").toLowerCase();
+      const shape = Array.isArray(d.shape)
+        ? d.shape.join("x")
+        : "";
+
+      let score = 0;
+
+      if (id.includes(query)) score += 5;
+      if (kind.includes(query)) score += 2;
+      if (dtype.includes(query)) score += 2;
+      if (shape.includes(query)) score += 1;
+
+      if (d.shape?.length === 2) {
+        score += 3 * state.spectralWeight;
+      }
+
+      if (d.shape?.length === 3) {
+        score += 0.5;
+      }
+
+      return {
+        id: d.id,
+        score,
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+    try {
+      const backendScores = [];
+
+      for (const d of state.datasets) {
+        if (d.shape?.length !== 2) {
+          continue;
+        }
+        let result;
+
+        try {
+          result = await runHybridDatasetSearch(d.id, query);
+        } catch (e) {
+          if (String(e.message).includes("No index built")) {
+            await buildDatasetIndex(d.id);
+            result = await runHybridDatasetSearch(d.id, query);
+          } else {
+            throw e;
+          }
+       }
+        
+        console.log(
+          "Hybrid search result for",
+          d.id,
+          result
+        );
+
+    backendScores.push({
+      id: d.id,
+      score:
+        result.score ??
+        result.best_score ??
+        result.results?.[0]?.score ??
+        0,
+    });
+  }
+
+  const validBackendScores = backendScores
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (validBackendScores.length > 0) {
+    state.rankedDatasetIds = validBackendScores.map((item) => item.id);
+
+    $("#search-mode-label").textContent =
+      `Hybrid ${state.spectralWeight.toFixed(2)}`;
+
+    $("#search-hint").textContent =
+      `${validBackendScores.length} hybrid 2-D result${
+        validBackendScores.length === 1 ? "" : "s"
+      } for "${query}". Tensor datasets are shown through local fallback ranking.`;
+
+    renderDatasetList();
+    return;
+  }
+} catch (e) {
+  console.warn("Hybrid search unavailable, using local ranking:", e);
+}
+
+  state.rankedDatasetIds = scored.map((item) => item.id);
+
   $("#search-mode-label").textContent =
-    `Spectral ${state.spectralWeight.toFixed(2)}`;
+    `Local ${state.spectralWeight.toFixed(2)}`;
 
   $("#search-hint").textContent =
-    `Filtering "${query}" with spectral-topological weight ${state.spectralWeight.toFixed(2)}.`;
+    `${scored.length} local ranked result${scored.length === 1 ? "" : "s"} for "${query}". Hybrid search is available only for 2-D datasets.`;
 
   renderDatasetList();
 }
@@ -1203,6 +1368,7 @@ function renderTensorViewer(tensor) {
         <button id="tensor-play-btn" class="tensor-play-btn">
           Play
         </button>
+
         <div class="tensor-slider-wrap">
           <input
             id="tensor-slice-slider"
@@ -1233,7 +1399,8 @@ function renderTensorViewer(tensor) {
           <div class="tensor-stat-card">
             <span>Mean</span>
             <strong id="tensor-mean">—</strong>
-          
+          </div>
+
           <div class="tensor-stat-card tensor-histogram-card">
             <span>Distribution</span>
             <canvas id="tensor-histogram"></canvas>
@@ -1269,79 +1436,59 @@ function renderTensorViewer(tensor) {
     updateTensorSlice(Number($("#tensor-slice-slider").value));
   });
 
-  $("#tensor-play-btn").addEventListener("click", () => {
-    const btn = $("#tensor-play-btn");
+  const playBtn = $("#tensor-play-btn");
 
-    if (state.tensorPlayTimer) {
+playBtn.addEventListener("click", () => {
+  const slider = $("#tensor-slice-slider");
+
+  if (!slider || !playBtn) return;
+
+  if (state.tensorPlayTimer) {
+    clearInterval(state.tensorPlayTimer);
+    state.tensorPlayTimer = null;
+    playBtn.textContent = "Play";
+    return;
+  }
+
+  if (Number(slider.value) >= Number(slider.max)) {
+    slider.value = "0";
+    $("#tensor-slice-value").textContent = "0";
+    updateTensorSlice(0);
+  }
+
+  playBtn.textContent = "Pause";
+
+  state.tensorPlayTimer = setInterval(() => {
+    const current = Number(slider.value);
+    const max = Number(slider.max);
+    const next = current + 1;
+
+    if (next > max) {
       clearInterval(state.tensorPlayTimer);
       state.tensorPlayTimer = null;
-      btn.textContent = "Play";
+      playBtn.textContent = "Play";
       return;
     }
 
-    btn.textContent = "Pause";
-
-    state.tensorPlayTimer = setInterval(() => {
-      const slider = $("#tensor-slice-slider");
-
-      let next = Number(slider.value) + 1;
-
-      if (next > Number(slider.max)) {
-        clearInterval(state.tensorPlayTimer);
-        state.tensorPlayTimer = null;
-        btn.textContent = "Play";
-        return;
-      }
-
-      slider.value = next;
-      $("#tensor-slice-value").textContent = String(next);
-      updateTensorSlice(next);
-    }, 350);
-  });
+    slider.value = String(next);
+    $("#tensor-slice-value").textContent = String(next);
+    updateTensorSlice(next);
+  }, 500);
+});
 
   updateTensorSlice(0);
-
-  $("#tensor-play-btn").addEventListener("click", () => {
-    const btn = $("#tensor-play-btn");
-
-    if (state.tensorPlayTimer) {
-      clearInterval(state.tensorPlayTimer);
-      state.tensorPlayTimer = null;
-      btn.textContent = "Play";
-      return;
-    }
-
-    btn.textContent = "Pause";
-
-    state.tensorPlayTimer = setInterval(() => {
-      const slider = $("#tensor-slice-slider");
-
-      let next =
-       Number(slider.value) + 1;
-
-      if (state.tensorPlayTimer) {
-        clearInterval(state.tensorPlayTimer);
-        state.tensorPlayTimer = null;
-        btn.textContent = "Play";
-
-        return;
-      
-}
-
-      slider.value = next;
-
-      $("#tensor-slice-value").textContent =
-       String(next);
-
-      updateTensorSlice(next);
-    }, 350);
-  });
 }
 
 function wireControls() {
   const filter = $("#filter");
   if (filter) {
-    filter.addEventListener("input", runSearch);
+    filter.addEventListener("input", () => {
+      clearTimeout(state.searchTimer);
+
+      state.searchTimer = setTimeout(() => {
+        runSearch();
+      }, 180);
+    });
   }
 
   const refreshBtn = $("#refresh-btn");
