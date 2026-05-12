@@ -622,7 +622,7 @@ def prompts_warm() -> dict[str, Any]:
 def prompts_lambdas() -> dict[str, Any]:
     engine = _get_engine()
     try:
-        lambdas = engine.gl.lambdas().tolist()
+        lambdas = engine.aspace.lambdas().tolist()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to compute lambdas: {exc}") from exc
     return {"lambdas": lambdas, "n": len(lambdas)}
@@ -660,7 +660,7 @@ def prompts_audit() -> dict[str, Any]:
         degrees = np.zeros(engine.aspace.nitems)
 
     try:
-        lambdas     = engine.gl.lambdas()
+        lambdas     = engine.aspace.lambdas()
         fiedler_val = float(sorted(lambdas)[1]) if len(lambdas) > 1 else 0.0
     except Exception:
         fiedler_val = 0.0

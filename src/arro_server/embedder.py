@@ -61,7 +61,7 @@ class EmbedderService:
         prefixed = _TASK_PREFIX + text
         vec = self._model.encode(
             prefixed,
-            normalize_embeddings=True,
+            normalize_embeddings=False,
             show_progress_bar=False,
         )
         return np.asarray(vec, dtype=np.float64)

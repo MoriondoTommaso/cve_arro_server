@@ -25,7 +25,7 @@ LAM         = 0.7   # MMR diversity weight: 1.0=pure relevance, 0.0=max diversit
 DEFAULT_TAU = 0.75
 
 # Keys that ArrowSpaceBuilder.build() accepts at graph-construction time.
-# tau is a *query-time* parameter and must never be passed to build().
+# tau/alpha/lam are query-time parameters and must never be passed to build().
 _BUILD_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
 
 # Hardcoded fallback params used when tuner results are absent (fresh clone / container).
@@ -100,10 +100,11 @@ class PromptSearchEngine:
             self.dataset: list[dict] = json.load(f)
         self._meta: dict[str, dict] = {item["id"]: item for item in self.dataset}
 
-        # 3. build ArrowSpace graph-Laplacian index
+        # 3. build ArrowSpace graph-Laplacian index.
+        #    build() signature: build(graph_params: dict | None, items: np.ndarray)
+        #    returns (ArrowSpace, GraphLaplacian)
         build_params = _load_best_params(data_dir)
-        builder      = ArrowSpaceBuilder()
-        self.aspace, self.gl = builder.build(self.embs, **build_params)
+        self.aspace, self.gl = ArrowSpaceBuilder().build(build_params, self.embs)
 
         PromptSearchEngine._instance = self
 
@@ -127,45 +128,54 @@ class PromptSearchEngine:
     def search(
         self,
         query: np.ndarray,
-        k: int       = 10,
         tau: float   = DEFAULT_TAU,
         alpha: float = 0.5,
         lam: float   = LAM,
+        k: int       = 10,
     ) -> list[dict]:
         """Return top-k results using ArrowSpace spectral search + MMR re-ranking.
 
         Args:
-            query: 768-d query embedding.
-            k:     Number of results to return.
+            query: 768-d query embedding (float64).
             tau:   Spectral sharpness passed to ArrowSpace taumode search.
             alpha: Blend factor. 0.0 = pure spectral, 1.0 = pure cosine similarity.
-                   Intermediate values blend both scores after min-max normalisation.
             lam:   MMR diversity weight. 1.0 = pure relevance, 0.0 = maximum diversity.
+            k:     Number of results to return. Must be <= topk set at build time.
         """
-        if query.shape[0] != _DIM:
-            raise ValueError(f"Query vector must have dim={_DIM}, got {query.shape[0]}")
+        if query.ndim != 1 or query.shape[0] != _DIM:
+            raise ValueError(f"Query vector must be 1-D with dim={_DIM}, got shape {query.shape}")
 
-        # 1. spectral retrieval — fetch a larger candidate pool for MMR
-        pool_k   = min(k * 4, len(self.ids))
-        q_dict   = {"vector": query.tolist(), "tau": tau}
-        raw      = self.aspace.search(q_dict, k=pool_k)
-        raw_idxs = [int(r["index"]) for r in raw]
-        raw_sims = np.array([float(r.get("score", 0.0)) for r in raw])
+        query = query.astype(np.float64)
 
-        # 2. cosine similarity between query and each candidate
-        #    (raw ArrowSpace scores may use a different metric internally)
+        # 1. Spectral retrieval.
+        #    Signature: aspace.search(item: np.ndarray[f64, 1d], gl: GraphLaplacian, tau: float)
+        #    Returns:   list[tuple[int, float]]  — (corpus_index, score) pairs.
+        #    Pool size is fixed at build-time topk; k must be <= topk.
+        raw: list[tuple[int, float]] = self.aspace.search(query, self.gl, tau)
+        raw_idxs = [r[0] for r in raw]
+        raw_sims  = np.array([r[1] for r in raw], dtype=np.float64)
+
+        pool_size = len(raw_idxs)
+        if k > pool_size:
+            log.warning(
+                "Requested k=%d but search pool only has %d results (topk at build time). "
+                "Returning %d results.",
+                k, pool_size, pool_size,
+            )
+            k = pool_size
+
+        # 2. Cosine similarity between query and each candidate.
         query_norm = query / (np.linalg.norm(query) + 1e-9)
-        pool_embs  = self.embs[raw_idxs]
+        pool_embs  = self.embs[raw_idxs]                                      # (pool, D)
         pool_norms = pool_embs / (np.linalg.norm(pool_embs, axis=1, keepdims=True) + 1e-9)
-        cos_sims   = pool_norms @ query_norm  # shape: (pool_k,)
+        cos_sims   = pool_norms @ query_norm                                   # (pool,)
 
-        # 3. alpha-blend: spectral score vs cosine similarity
+        # 3. Alpha-blend: spectral score vs cosine similarity.
         spectral_norm = _norm(raw_sims)
         cos_norm      = _norm(cos_sims)
         relevance     = alpha * cos_norm + (1.0 - alpha) * spectral_norm
 
-        # 4. saliency: upvotes / likes / uses / views signal blend
-        #    Key names match PromptSearchResult and dataset.json fields.
+        # 4. Saliency: upvotes / likes / uses / views signal blend.
         sal_scores = np.array([
             (
                 W_UP   * float(self._meta.get(self.ids[i], {}).get("upvotes", 0)) +
@@ -174,23 +184,24 @@ class PromptSearchEngine:
                 W_VIEW * float(self._meta.get(self.ids[i], {}).get("views",   0))
             )
             for i in raw_idxs
-        ])
+        ], dtype=np.float64)
 
-        # 5. combined score: relevance blend + saliency
+        # 5. Combined score: relevance blend + saliency.
         combined = (1.0 - SAL_WEIGHT) * relevance + SAL_WEIGHT * _norm(sal_scores)
 
-        # 6. MMR re-ranking
-        emb_pool   = self.embs[raw_idxs]
-        selected   : list[int] = []
-        remaining  = list(range(len(raw_idxs)))
+        # 6. MMR re-ranking.
+        #    Use L2-normalised embeddings for inter-candidate cosine similarity
+        #    so the diversity penalty is directional, not magnitude-dependent.
+        selected : list[int] = []
+        remaining = list(range(pool_size))
 
         while remaining and len(selected) < k:
             rem_arr = np.array(remaining)
             if not selected:
                 best_local = int(np.argmax(combined[rem_arr]))
             else:
-                sel_embs   = emb_pool[selected]
-                sim_to_sel = (emb_pool[rem_arr] @ sel_embs.T).max(axis=1)
+                sel_norms  = pool_norms[selected]                              # (sel, D)
+                sim_to_sel = (pool_norms[rem_arr] @ sel_norms.T).max(axis=1)  # (rem,)
                 mmr_scores = lam * combined[rem_arr] - (1.0 - lam) * sim_to_sel
                 best_local = int(np.argmax(mmr_scores))
             best = remaining[best_local]
@@ -206,8 +217,6 @@ class PromptSearchEngine:
                 "id":        self.ids[corpus_i],
                 "score":     float(combined[pool_i]),
                 "sim":       float(raw_sims[pool_i]),
-                # Field name 'content' matches PromptSearchResult.content and
-                # dataset.json; '_salience' matches the AliasChoices in the schema.
                 "content":   item.get("content", item.get("text", "")),
                 "_salience": float(sal_scores[pool_i]),
                 "tags":      item.get("tags", []),
@@ -217,3 +226,4 @@ class PromptSearchEngine:
                 "views":     item.get("views", 0),
             })
         return results
+    
