@@ -217,9 +217,9 @@ def dataset_stats(
     if h.fs_path is None:
         return {}
     try:
-        return adapter.sidecar_stats(h.fs_path)
-    except FileNotFoundError:
-        return {}
+        return adapter.stats_data(h.summary.dataset_id)    
+    except Exception:
+        pass  # fallback sidecar se vuoi mantenerlo
 
 
 @router.get("/datasets/{dataset_id}/manifold")
@@ -232,9 +232,9 @@ def dataset_manifold(
     if h.fs_path is None:
         return {}
     try:
-        return adapter.sidecar_manifold(h.fs_path)
-    except FileNotFoundError:
-        return {}
+        return adapter.manifold_data(h.summary.dataset_id) 
+    except Exception:
+        pass
 
 
 @router.get("/datasets/{dataset_id}/search")
@@ -329,7 +329,7 @@ def dataset_lambdas(
     if h.fs_path is None:
         raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
     try:
-        return adapter.lambdas(h.fs_path)
+        return adapter.lambdas(h.summary.dataset_id)
     except (FileNotFoundError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -344,7 +344,7 @@ def dataset_graph_laplacian(
     if h.fs_path is None:
         raise HTTPException(status_code=404, detail="No filesystem path for this dataset.")
     try:
-        return adapter.graph_laplacian_info(h.fs_path)
+        return adapter.graph_laplacian_info(h.summary.dataset_id)
     except (FileNotFoundError, NotImplementedError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
