@@ -1318,3 +1318,227 @@ td.row-idx {
   font-size: 1rem;
 }
 
+.tensor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.tensor-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.meta-panel .signal-card {
+  padding: 12px 14px;
+  min-height: auto;
+}
+
+.meta-panel h3 {
+  margin: 14px 0 10px;
+}
+
+.metadata-grid,
+.manifold-grid,
+.stats-grid {
+  gap: 10px;
+}
+
+.signal-empty {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.tensor-viewer {
+  width: 100%;
+}
+
+.tensor-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.tensor-info {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.tensor-preview-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 22px;
+  align-items: stretch;
+}
+
+.tensor-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 320px;
+  background: rgba(0, 0, 0, 0.24);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+}
+
+#tensor-canvas {
+  width: 300px;
+  height: 300px;
+  border-radius: 14px;
+  image-rendering: pixelated;
+}
+
+.tensor-slice-stats {
+  display: grid;
+  gap: 12px;
+}
+
+.tensor-stat-card {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.manifold-plot-card {
+  grid-column: 1 / -1;
+  min-height: 280px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+#manifold-plot {
+  width: 100%;
+  height: 260px;
+}
+
+.manifold-tooltip {
+  margin-top: 10px;
+  width: fit-content;
+
+  padding: 6px 10px;
+
+  border-radius: 999px;
+
+  background: rgba(94,162,255,0.10);
+  border: 1px solid rgba(94,162,255,0.20);
+
+  color: #b9d5ff;
+
+  font-size: 0.76rem;
+  font-family: ui-monospace, monospace;
+}
+
+.manifold-canvas-stack {
+  position: relative;
+  width: 100%;
+  height: 260px;
+}
+
+#manifold-plot,
+#manifold-highlight {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 260px;
+}
+
+#manifold-highlight {
+  pointer-events: none;
+}
+
+.manifold-plot-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+
+  margin-bottom: 12px;
+}
+
+.manifold-plot-title span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.manifold-plot-title strong {
+  color: #eef5ff;
+  font-size: 0.82rem;
+  font-family: ui-monospace, monospace;
+}
+
+.manifold-plot-card {
+  overflow: hidden;
+}
+
+.manifold-canvas-stack {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+#manifold-plot,
+#manifold-highlight {
+  max-width: 100%;
+}
+
+.tensor-play-btn {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(124,92,255,0.12);
+
+  color: #d8cbff;
+
+  padding: 10px 16px;
+
+  border-radius: 12px;
+
+  cursor: pointer;
+
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.15s ease;
+}
+
+.tensor-play-btn:hover {
+  background: rgba(124,92,255,0.18);
+  border-color: rgba(124,92,255,0.35);
+
+  transform: translateY(-1px);
+}
+
+.tensor-histogram-card {
+  overflow: hidden;
+}
+
+#tensor-histogram {
+  width: 100%;
+  height: 90px;
+
+  margin-top: 10px;
+
+  border-radius: 10px;
+
+  background: rgba(255,255,255,0.025);
+}
+
+.tensor-canvas-wrap {
+  min-width: 320px;
+  min-height: 320px;
+}
+
+#tensor-canvas {
+  display: block;
+  width: 300px;
+  height: 300px;
+}

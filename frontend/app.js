@@ -14,6 +14,7 @@ const state = {
   spectralWeight: 0.5,
   tensorData: null,
   tensorColorMode: "grayscale",
+  tensorPlayTimer: null,
 };
 
 async function api(path) {
@@ -68,18 +69,19 @@ function renderDatasetList() {
     li.appendChild(badge);
     li.addEventListener("click", () => selectDataset(d));
     ul.appendChild(li);
-    if (visibleCount === 0) {
-  ul.innerHTML = `
-    <li class="empty-list">
-      No datasets found
-    </li>
+  }
+  if (visibleCount === 0) {
+    ul.innerHTML = `
+      <li class="empty-list">
+        No datasets found
+      </li>
   `;
 }
+
 $("#filter-status").textContent =
   f
     ? `${visibleCount} result${visibleCount === 1 ? "" : "s"} for "${f}"`
     : "All datasets";
-  }
 }
 
 function resetMetrics() {
@@ -93,6 +95,10 @@ async function selectDataset(d) {
   state.nextOffset = 0;
   state.exhausted = false;
   state.sliceMode = false;
+  if (state.tensorPlayTimer) {
+    clearInterval(state.tensorPlayTimer);
+    state.tensorPlayTimer = null;
+  }
   $("#dataset-title").textContent = d.id;
   $("#copy-id-btn").disabled = false;
   $("#copy-id-btn").disabled = false;
@@ -194,11 +200,20 @@ async function loadMetadata(d) {
 }
 
 function renderManifold(manifold) {
-  const method = manifold.method ?? "Unknown";
-  const embeddingDim = manifold.embedding_dim ?? "—";
-  const clusters = manifold.clusters ?? "—";
-  const topology = manifold.topology ?? "—";
-  const neighbors = manifold.neighbors ?? "—";
+  const method = manifold.method ?? manifold.kind ?? "Unknown";
+  const embeddingDim = manifold.embedding_dim ?? manifold.intrinsic_dim ?? "—";
+  const embeddingPoints =
+    Array.isArray(manifold.embedding)
+      ? manifold.embedding.length
+      : "—";
+
+  const embeddingAxes =
+    Array.isArray(manifold.embedding?.[0])
+      ? manifold.embedding[0].length
+      : "—";
+
+  const source =
+    manifold.source ?? manifold.backend ?? "local";
 
   $("#manifold-out").innerHTML = `
     <div class="signal-card">
@@ -208,32 +223,226 @@ function renderManifold(manifold) {
 
     <div class="signal-card">
       <span class="signal-label">Embedding Dim</span>
-      <strong>${embeddingDim}D</strong>
+      <strong>${embeddingDim}</strong>
     </div>
 
     <div class="signal-card">
-      <span class="signal-label">Clusters</span>
-      <strong>${clusters}</strong>
+      <span class="signal-label">Embedding Points</span>
+      <strong>${embeddingPoints}</strong>
     </div>
 
     <div class="signal-card">
-      <span class="signal-label">Topology</span>
-      <strong>${topology}</strong>
+      <span class="signal-label">Embedding Axes</span>
+      <strong>${embeddingAxes}</strong>
     </div>
 
     <div class="signal-card">
-      <span class="signal-label">Neighbors</span>
-      <strong>${neighbors}</strong>
+      <span class="signal-label">Source</span>
+      <strong>${source}</strong>
+    </div>
+
+    <div class="manifold-plot-card">
+      <div class="manifold-plot-title">
+        <span>Embedding Projection</span>
+        <strong>${embeddingPoints} points · ${embeddingAxes}D</strong>
+      </div>
+
+      <div class="manifold-canvas-stack">
+        <canvas id="manifold-plot"></canvas>
+        <canvas id="manifold-highlight"></canvas>
+      </div>
+
+      <div id="manifold-tooltip" class="manifold-tooltip">
+        Hover points
+      </div>
     </div>
   `;
+  renderManifoldPlot(manifold);
 }
+
+function renderManifoldPlot(manifold) {
+  const canvas = document.getElementById("manifold-plot");
+
+  if (!canvas) return;
+
+  const embedding = manifold.embedding;
+
+  if (
+    !Array.isArray(embedding) ||
+    !Array.isArray(embedding[0])
+  ) {
+    canvas.replaceWith(createEmptyManifoldMessage());
+    return;
+  }
+
+  const ctx = canvas.getContext("2d");
+  const highlightCanvas = document.getElementById("manifold-highlight");
+  const highlightCtx = highlightCanvas?.getContext("2d");
+
+  if (highlightCanvas) {
+    highlightCanvas.width = 420;
+    highlightCanvas.height = 260;
+  }
+
+  canvas.width = 420;
+  canvas.height = 260;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+
+  ctx.strokeRect(
+    20,
+    20,
+    canvas.width - 40,
+    canvas.height - 40
+  );
+
+  ctx.strokeStyle = "rgba(255,255,255,0.05)";
+
+  ctx.beginPath();
+  ctx.moveTo(20, canvas.height / 2);
+  ctx.lineTo(canvas.width - 20, canvas.height / 2);
+  ctx.moveTo(canvas.width / 2, 20);
+  ctx.lineTo(canvas.width / 2, canvas.height - 20);
+  ctx.stroke();
+
+  const xs = embedding.map((p) => Number(p[0]) || 0);
+  const ys = embedding.map((p) => Number(p[1]) || 0);
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  embedding.forEach((p) => {
+    const x =
+      ((p[0] - minX) / (maxX - minX || 1)) *
+        (canvas.width - 40) +
+      20;
+
+    const y =
+      ((p[1] - minY) / (maxY - minY || 1)) *
+        (canvas.height - 40) +
+      20;
+
+    ctx.beginPath();
+
+    ctx.arc(
+      x,
+      canvas.height - y,
+      2.5,
+      0,
+      Math.PI * 2
+    );
+
+    const gradient = ctx.createRadialGradient(x, canvas.height - y, 0, x, canvas.height - y, 5);
+    gradient.addColorStop(0, "rgba(124, 92, 255, 0.95)");
+    gradient.addColorStop(1, "rgba(94, 162, 255, 0.15)");
+
+    ctx.fillStyle = gradient;
+    ctx.fill();
+  });
+  const tooltip = document.getElementById("manifold-tooltip");
+
+  canvas.addEventListener("mousemove", (event) => {
+    if (!tooltip) return;
+
+    const rect = canvas.getBoundingClientRect();
+
+    const mouseX =
+      ((event.clientX - rect.left) / rect.width) * canvas.width;
+
+    const mouseY =
+      ((event.clientY - rect.top) / rect.height) * canvas.height;
+
+    let closest = null;
+    let bestDistance = Infinity;
+
+    embedding.forEach((p, index) => {
+      const px =
+        ((p[0] - minX) / (maxX - minX || 1)) *
+          (canvas.width - 40) +
+        20;
+
+      const py =
+        canvas.height -
+        (((p[1] - minY) / (maxY - minY || 1)) *
+          (canvas.height - 40) +
+         20);
+
+      const distance = Math.hypot(mouseX - px, mouseY - py);
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        closest = { index, x: p[0], y: p[1] };
+      }
+    });
+    
+    if (highlightCtx && closest) {
+      highlightCtx.clearRect(
+        0,
+        0,
+        highlightCanvas.width,
+        highlightCanvas.height
+      );
+
+      const hx =
+        ((closest.x - minX) / (maxX - minX || 1)) *
+          (highlightCanvas.width - 40) +
+        20;
+
+      const hy =
+        highlightCanvas.height -
+        (((closest.y - minY) / (maxY - minY || 1)) *
+          (highlightCanvas.height - 40) +
+          20);
+
+      highlightCtx.beginPath();
+      highlightCtx.arc(hx, hy, 7, 0, Math.PI * 2);
+      highlightCtx.strokeStyle = "rgba(255,255,255,0.85)";
+      highlightCtx.lineWidth = 2;
+      highlightCtx.stroke();
+    }
+
+    if (!closest || bestDistance > 18) {
+      tooltip.textContent = "Hover points";
+      return;
+      if (highlightCtx) {
+        highlightCtx.clearRect(
+          0,
+          0,
+          highlightCanvas.width,
+          highlightCanvas.height
+      );
+  }
+
+  return;
+}
+
+    tooltip.textContent =
+      `#${closest.index} · x=${Number(closest.x).toFixed(3)} · y=${Number(closest.y).toFixed(3)}`;
+  });
+}
+
+function createEmptyManifoldMessage() {
+  const div = document.createElement("div");
+  div.className = "signal-empty";
+  div.textContent =
+    "No embedding coordinates available for this dataset";
+  return div;
+}
+
 
 async function loadManifold(d) {
   try {
-    const m = await api(`/api/datasets/${encodeURI(d.id)}/manifold`);
-
+    const m = await api(`/api/datasets/${encodeURIComponent(d.id)}/manifold`);
     renderManifold(m);
   } catch (e) {
+    console.warn("Manifold unavailable:", e);
+
     $("#manifold-out").innerHTML = `
       <div class="signal-card">
         <span class="signal-label">Status</span>
@@ -287,9 +496,25 @@ function renderArrowSpaceSignals(stats) {
     stats.eigenvalues ??
     null;
 
+  if (gl == null && lambdas == null) {
+    $("#signal-gl").innerHTML = `
+      <div class="signal-empty">
+        No graph signal available for this dataset
+      </div>
+    `;
+
+    $("#signal-lambda").innerHTML = `
+      <div class="signal-empty">
+        No eigenvalue distribution available
+      </div>
+    `;
+
+    return;
+  }
+
   if (gl == null) {
     $("#signal-gl").innerHTML = `
-      <div class="signal-empty">Unavailable</div>
+      <div class="signal-empty">No graph signal available</div>
     `;
   } else {
     $("#signal-gl").innerHTML = `
@@ -307,28 +532,54 @@ function renderArrowSpaceSignals(stats) {
 
   if (lambdas == null) {
     $("#signal-lambda").innerHTML = `
-      <div class="signal-empty">Unavailable</div>
+      <div class="signal-empty">No eigenvalue distribution available</div>
     `;
   } else {
-    $("#signal-lambda").innerHTML =
-      renderLambdaBars(lambdas);
+    $("#signal-lambda").innerHTML = renderLambdaBars(lambdas);
   }
 }
 
+
 function renderStats(stats) {
-  const glNodes =
-    stats.gl?.nodes ?? "—";
+  const hasGraphStats =
+    stats.gl ||
+    stats.lambdas_distribution ||
+    stats.spectral_topology_score;
+
+  if (!hasGraphStats) {
+    $("#stats-out").innerHTML = `
+      <div class="signal-card">
+        <span class="signal-label">Mean</span>
+        <strong>${formatCell(stats.mean ?? "—")}</strong>
+      </div>
+
+      <div class="signal-card">
+        <span class="signal-label">Std</span>
+        <strong>${formatCell(stats.std ?? "—")}</strong>
+      </div>
+
+      <div class="signal-card">
+        <span class="signal-label">Min</span>
+        <strong>${formatCell(stats.min ?? "—")}</strong>
+      </div>
+
+      <div class="signal-card">
+        <span class="signal-label">Max</span>
+        <strong>${formatCell(stats.max ?? "—")}</strong>
+      </div>
+    `;
+    return;
+  }
+
+  const glNodes = stats.gl?.nodes ?? "—";
 
   const glShape =
     stats.gl?.shape
       ? `${stats.gl.shape[0]} × ${stats.gl.shape[1]}`
       : "—";
 
-  const lambdaCount =
-    stats.lambdas_distribution?.length ?? 0;
-
-  const topologyScore =
-    stats.spectral_topology_score ?? "—";
+  const lambdaCount = stats.lambdas_distribution?.length ?? 0;
+  const topologyScore = stats.spectral_topology_score ?? "—";
 
   $("#stats-out").innerHTML = `
     <div class="signal-card">
@@ -353,6 +604,7 @@ function renderStats(stats) {
   `;
 }
 
+
 async function loadStats(d) {
   try {
     const s = await api(`/api/datasets/${encodeURI(d.id)}/stats`);
@@ -360,7 +612,6 @@ async function loadStats(d) {
     renderStats(s);
     renderArrowSpaceSignals(s);
 
-    console.log("Stats response:", s);
   } catch (e) {
     $("#stats-out").innerHTML = `
       <div class="signal-card">
@@ -391,7 +642,6 @@ async function loadNextPage() {
   try {
     const url = `/api/datasets/${encodeURI(state.selected.id)}/data?offset=${state.nextOffset}&limit=${state.windowSize}`;
     const page = await api(url);
-    console.log("Data page response:", page);
     appendRows(page);
     if (page.next_offset == null) {
       state.exhausted = true;
@@ -416,7 +666,9 @@ async function loadNextPage() {
 
 async function applySlice() {
   if (!state.selected) return;
+
   const spec = $("#slice-input").value.trim();
+
   if (!spec) {
     state.sliceMode = false;
     state.nextOffset = 0;
@@ -424,16 +676,44 @@ async function applySlice() {
     $("#grid").innerHTML = "";
     return loadNextPage();
   }
+
   state.sliceMode = true;
   $("#data-status").textContent = `slice ${spec} loading…`;
+
   try {
-    const url = `/api/datasets/${encodeURI(state.selected.id)}/slice?slice=${encodeURIComponent(spec)}`;
+    const url =
+      `/api/datasets/${encodeURIComponent(state.selected.id)}/slice?spec=${encodeURIComponent(spec)}`;
+
     const r = await api(url);
+
     $("#grid").innerHTML = "";
-    appendRows(r.data);
-    $("#data-status").textContent = `slice ${spec} → shape [${r.out_shape.join(",")}]`;
+
+    const raw =
+      r.data?.rows ??
+      r.data?.values ??
+      r.rows ??
+      r.values ??
+      r.data ??
+      [];
+
+    const rows =
+      typeof raw === "function"
+        ? []
+        : raw;
+
+    appendRows({
+      rows: Array.isArray(rows) ? rows : [rows],
+    });
+
+    const outShape = r.out_shape ?? r.shape ?? r.data?.shape ?? [];
+
+    $("#data-status").textContent =
+      `slice ${spec} → shape [${
+        Array.isArray(outShape) ? outShape.join(",") : "preview"
+      }]`;
   } catch (e) {
     $("#data-status").textContent = "";
+
     $("#grid").innerHTML = `
       <div class="error-screen">
         <h2>Unable to load data</h2>
@@ -626,6 +906,55 @@ async function updateTensorSlice(sliceIndex) {
     console.warn("Tensor slice unavailable:", e);
     $("#data-status").textContent = "tensor slice error";
   }
+
+  function renderTensorHistogram(values) {
+    const canvas = $("#tensor-histogram");
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = 260;
+    canvas.height = 90;
+
+    const finiteValues = values.map(Number).filter(Number.isFinite);
+    if (finiteValues.length === 0) return;
+
+    const min = Math.min(...finiteValues);
+    const max = Math.max(...finiteValues);
+    const range = max - min || 1;
+
+    const bins = 24;
+    const counts = Array(bins).fill(0);
+
+    finiteValues.forEach((value) => {
+      const idx = Math.min(
+        bins - 1,
+        Math.floor(((value - min) / range) * bins)
+      );
+
+      counts[idx]++;
+    });
+
+    const maxCount = Math.max(...counts) || 1;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const barWidth = canvas.width / bins;
+
+    counts.forEach((count, i) => {
+      const barHeight =
+        (count / maxCount) * (canvas.height - 12);
+
+      ctx.fillStyle = "rgba(94,162,255,0.75)";
+
+      ctx.fillRect(
+        i * barWidth,
+        canvas.height - barHeight,
+        Math.max(1, barWidth - 2),
+        barHeight
+      );
+    });
+  }
 }
 
 
@@ -711,6 +1040,8 @@ function renderTensorSlice(matrix) {
   $("#tensor-max").textContent = max.toFixed(2);
   $("#tensor-mean").textContent = mean.toFixed(2);
 
+  // renderTensorHistogram(flatValues);
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
@@ -764,16 +1095,13 @@ function hideTensorViewer() {
 
 function renderTensorPreview(tensor) {
   const canvas = document.createElement("canvas");
-
-  const size = 64;
+  const size = 96;
 
   canvas.width = size;
   canvas.height = size;
-
   canvas.className = "tensor-preview";
 
   const ctx = canvas.getContext("2d");
-
   const matrix = normalizeMatrix(tensor);
 
   if (!matrix) return canvas;
@@ -781,13 +1109,19 @@ function renderTensorPreview(tensor) {
   const h = matrix.length;
   const w = matrix[0]?.length || 1;
 
+  const flatValues = matrix.flat().map(Number).filter(Number.isFinite);
+
+  const min = Math.min(...flatValues);
+  const max = Math.max(...flatValues);
+  const range = max - min || 1;
+
   const img = ctx.createImageData(w, h);
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
-
-      const v = Number(matrix[y][x]) || 0;
+      const normalized = ((Number(matrix[y][x]) - min) / range) * 255;
+      const v = Math.max(0, Math.min(255, normalized));
 
       img.data[idx + 0] = v;
       img.data[idx + 1] = v;
@@ -807,7 +1141,6 @@ function renderTensorPreview(tensor) {
 
   return canvas;
 }
-
 
 function attachInfiniteScroll() {
   $("#grid").addEventListener("scroll", (e) => {
@@ -845,7 +1178,7 @@ function renderTensorViewer(tensor) {
   const grid = $("#grid");
 
   grid.innerHTML = `
-    <div id="tensor-viewer">
+    <div id="tensor-viewer" class="tensor-viewer">
       <div class="tensor-toolbar">
         <div class="tensor-info">
           <span>Slice Shape</span>
@@ -867,6 +1200,9 @@ function renderTensorViewer(tensor) {
           </button>
         </div>
 
+        <button id="tensor-play-btn" class="tensor-play-btn">
+          Play
+        </button>
         <div class="tensor-slider-wrap">
           <input
             id="tensor-slice-slider"
@@ -881,7 +1217,7 @@ function renderTensorViewer(tensor) {
       </div>
 
       <div class="tensor-preview-layout">
-        <div id="tensor-canvas-wrap"></div>
+        <div id="tensor-canvas-wrap" class="tensor-canvas-wrap"></div>
 
         <div class="tensor-slice-stats">
           <div class="tensor-stat-card">
@@ -897,6 +1233,10 @@ function renderTensorViewer(tensor) {
           <div class="tensor-stat-card">
             <span>Mean</span>
             <strong id="tensor-mean">—</strong>
+          
+          <div class="tensor-stat-card tensor-histogram-card">
+            <span>Distribution</span>
+            <canvas id="tensor-histogram"></canvas>
           </div>
         </div>
       </div>
@@ -929,7 +1269,73 @@ function renderTensorViewer(tensor) {
     updateTensorSlice(Number($("#tensor-slice-slider").value));
   });
 
+  $("#tensor-play-btn").addEventListener("click", () => {
+    const btn = $("#tensor-play-btn");
+
+    if (state.tensorPlayTimer) {
+      clearInterval(state.tensorPlayTimer);
+      state.tensorPlayTimer = null;
+      btn.textContent = "Play";
+      return;
+    }
+
+    btn.textContent = "Pause";
+
+    state.tensorPlayTimer = setInterval(() => {
+      const slider = $("#tensor-slice-slider");
+
+      let next = Number(slider.value) + 1;
+
+      if (next > Number(slider.max)) {
+        clearInterval(state.tensorPlayTimer);
+        state.tensorPlayTimer = null;
+        btn.textContent = "Play";
+        return;
+      }
+
+      slider.value = next;
+      $("#tensor-slice-value").textContent = String(next);
+      updateTensorSlice(next);
+    }, 350);
+  });
+
   updateTensorSlice(0);
+
+  $("#tensor-play-btn").addEventListener("click", () => {
+    const btn = $("#tensor-play-btn");
+
+    if (state.tensorPlayTimer) {
+      clearInterval(state.tensorPlayTimer);
+      state.tensorPlayTimer = null;
+      btn.textContent = "Play";
+      return;
+    }
+
+    btn.textContent = "Pause";
+
+    state.tensorPlayTimer = setInterval(() => {
+      const slider = $("#tensor-slice-slider");
+
+      let next =
+       Number(slider.value) + 1;
+
+      if (state.tensorPlayTimer) {
+        clearInterval(state.tensorPlayTimer);
+        state.tensorPlayTimer = null;
+        btn.textContent = "Play";
+
+        return;
+      
+}
+
+      slider.value = next;
+
+      $("#tensor-slice-value").textContent =
+       String(next);
+
+      updateTensorSlice(next);
+    }, 350);
+  });
 }
 
 function wireControls() {
