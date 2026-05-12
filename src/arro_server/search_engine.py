@@ -215,6 +215,7 @@ class PromptSearchEngine:
             results.append({
                 "rank":      rank + 1,
                 "id":        self.ids[corpus_i],
+                'alpha':     tau,
                 "score":     float(combined[pool_i]),
                 "sim":       float(raw_sims[pool_i]),
                 "content":   item.get("content", item.get("text", "")),
