@@ -1,97 +1,67 @@
-"""EmbedderService — NL query -> 768-d nomic embedding.
-
-Wraps sentence-transformers (nomic-ai/nomic-embed-text-v1.5) and exposes a
-single .embed(text) method that returns a L2-normalised 768-dimensional
-float64 numpy array ready to pass straight to PromptSearchEngine.search().
-
-The singleton is loaded once at application startup via the FastAPI lifespan
-and cached for the lifetime of the process.
-"""
+# MODIFIED FILE
+# Original source: Genefold/arro-server (https://github.com/Genefold/arro-server)
+# Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
+# Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
+#   - Added EmbedderService singleton wrapping nomic-embed-text-v1.5
+#   - Added lazy-load pattern with SentenceTransformer trust_remote_code
+#   - Added task-prefix injection required by the Nomic v1.5 model
+# See CHANGES.md for full modification record.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+if TYPE_CHECKING:
+    pass
+
 log = logging.getLogger(__name__)
 
-_DIM = 768
-# nomic requires this task prefix for query-side embeddings.
 _TASK_PREFIX = "search_query: "
 
 
 class EmbedderService:
-    """Thin wrapper around SentenceTransformer for nomic-embed-text-v1.5.
+    """Singleton that wraps a SentenceTransformer model for query embedding.
 
-    Parameters
-    ----------
-    model_name:
-        HuggingFace model id. Defaults to ``nomic-ai/nomic-embed-text-v1.5``.
-        Override via ARRO_SERVER_EMBEDDER_MODEL env var.
+    Only loaded when the [nlp] extra is installed.  The engine falls back
+    gracefully to vector-only search when this service is absent.
     """
 
     _instance: "EmbedderService | None" = None
 
-    def __init__(self, model_name: str = "nomic-ai/nomic-embed-text-v1.5") -> None:
+    def __init__(self, model_name: str) -> None:
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore
         except ImportError as exc:
             raise ImportError(
-                "sentence-transformers is required for NL search. "
-                "Install with: pip install 'arro-server[nlp]'"
+                "sentence-transformers is required for natural-language search. "
+                "Install it with: pip install 'arro-server[nlp]'"
             ) from exc
 
         log.info("Loading embedder model: %s", model_name)
-        # No `backend` kwarg — sentence-transformers picks the best available
-        # backend automatically (torch on MPS/CUDA/CPU).  The `sdpa` string was
-        # only accepted by ST >= 3.x compiled with Flash Attention; omitting it
-        # is safe across all supported versions.
-        self._model = SentenceTransformer(
+        self.model_name = model_name
+        self._model     = SentenceTransformer(
             model_name,
             trust_remote_code=True,
         )
-        self.model_name = model_name
-        self.dim = _DIM
-        log.info("EmbedderService ready — model=%s dim=%d", model_name, _DIM)
-
-    # ── public API ────────────────────────────────────────────────────────────
-
-    def embed(self, text: str) -> np.ndarray:
-        """Embed a single NL query string.
-
-        Returns a L2-normalised 768-d float64 numpy array.
-        The nomic task prefix (``search_query: ``) is prepended automatically.
-        """
-        prefixed = _TASK_PREFIX + text.strip()
-        vec = self._model.encode(
-            [prefixed],
-            normalize_embeddings=True,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        )[0].astype(np.float64)
-        return vec
-
-    def embed_batch(self, texts: list[str]) -> np.ndarray:
-        """Embed a list of NL query strings (shape: [N, 768], float64, L2-normed)."""
-        prefixed = [_TASK_PREFIX + t.strip() for t in texts]
-        vecs = self._model.encode(
-            prefixed,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-        ).astype(np.float64)
-        return vecs
-
-    # ── singleton ─────────────────────────────────────────────────────────────
+        EmbedderService._instance = self
+        log.info("Embedder model loaded.")
 
     @classmethod
     def get(cls) -> "EmbedderService":
         if cls._instance is None:
             from .settings import get_settings
-            cls._instance = cls(get_settings().embedder_model)
+            settings = get_settings()
+            cls._instance = cls(settings.embedder_model)
         return cls._instance
 
-    @classmethod
-    def reset(cls) -> None:
-        """Clear the singleton — used in tests."""
-        cls._instance = None
+    def embed(self, text: str) -> np.ndarray:
+        """Return a float64 unit-normalised embedding for *text*."""
+        prefixed = _TASK_PREFIX + text
+        vec = self._model.encode(
+            prefixed,
+            normalize_embeddings=False,
+            show_progress_bar=False,
+        )
+        return np.asarray(vec, dtype=np.float64)
