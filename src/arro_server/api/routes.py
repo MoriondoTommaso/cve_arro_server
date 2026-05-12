@@ -1,3 +1,11 @@
+# MODIFIED FILE
+# Original source: Genefold/arro-server (https://github.com/Genefold/arro-server)
+# Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
+# Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
+#   - Added /api/prompts/* route group (health, warm, lambdas, graph_laplacian,
+#     audit, search, nl_search) for LEAF Kaban semantic prompt search
+#   - Updated /api/health to report prompt_engine_ready and embedder_ready
+# See CHANGES.md for full modification record.
 """API route handlers for arro-server.
 
 All routes are mounted under the /api prefix.
@@ -261,6 +269,24 @@ def build_index(
             status_code=422,
             detail="Dataset does not expose a raw array (not a Zarr array handle).",
         )
+
+    # Guard: refuse to materialise arrays that exceed the window budget
+    arr_shape = getattr(raw_arr, "shape", None)
+    if arr_shape is not None:
+        total_elements = 1
+        for dim in arr_shape:
+            total_elements *= dim
+        max_elements = settings.max_window * (arr_shape[1] if len(arr_shape) > 1 else 1)
+        if total_elements > max_elements:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Array has {total_elements:,} elements which exceeds the "
+                    f"max_window budget ({max_elements:,}). "
+                    "Increase ARRO_SERVER_MAX_WINDOW or use a smaller dataset."
+                ),
+            )
+
     try:
         array = np.asarray(raw_arr[:], dtype=np.float64)
     except Exception as exc:

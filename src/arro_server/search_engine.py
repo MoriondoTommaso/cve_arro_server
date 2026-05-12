@@ -1,4 +1,11 @@
-# src/arro_server/search_engine.py
+# MODIFIED FILE
+# Original source: Genefold/arro-server (https://github.com/Genefold/arro-server)
+# Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
+# Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
+#   - Added PromptSearchEngine class with MMR re-ranking and saliency weighting
+#   - Added _load_best_params() tuner integration with hardcoded fallback defaults
+#   - Added _norm() min-max normalisation helper
+# See CHANGES.md for full modification record.
 from __future__ import annotations
 
 import json
@@ -28,7 +35,9 @@ _DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0}
 
 def _norm(arr: np.ndarray) -> np.ndarray:
     mn, mx = arr.min(), arr.max()
-    return (arr - mn) / (mx - mn + 1e-9)
+    if mx == mn:
+        return np.zeros_like(arr)
+    return (arr - mn) / (mx - mn)
 
 
 def _load_best_params(data_dir: Path) -> dict:
@@ -85,128 +94,92 @@ class PromptSearchEngine:
         # 1. embeddings + ids
         self.embs: np.ndarray = np.load(embs_path).astype(np.float64)
         self.ids:  list[str]  = list(np.load(ids_path, allow_pickle=True))
-        if self.embs.shape[0] != len(self.ids):
-            raise AssertionError(
-                f"embeddings rows ({self.embs.shape[0]}) != id count ({len(self.ids)})"
-            )
 
-        # 2. dataset map  pk_NNNNN -> full JSON record
-        dataset: list[dict] = json.loads(dataset_path.read_text())
-        self.dataset_map: dict[str, dict] = {r["id"]: r for r in dataset}
+        # 2. dataset metadata
+        with dataset_path.open() as f:
+            self.dataset: list[dict] = json.load(f)
 
-        # 3. salience vector (parallel to embs rows)
-        records    = [self.dataset_map[pk] for pk in self.ids]
-        upvotes    = _norm(np.array([r.get("upvotes", 0)           for r in records], dtype=float))
-        likes      = _norm(np.array([r.get("likes", 0)             for r in records], dtype=float))
-        reputation = _norm(np.array([r.get("author_reputation", 0) for r in records], dtype=float))
-        views      = _norm(np.log1p(np.array([r.get("views", 0)    for r in records], dtype=float)))
-        sal_arr    = _norm(W_UP * upvotes + W_LK * likes + W_REP * reputation + W_VIEW * views)
-        self.salience: dict[str, float] = {
-            self.ids[i]: float(sal_arr[i]) for i in range(len(self.ids))
-        }
-
-        # 4. build graph index — eps & k only, tau excluded
+        # 3. build ArrowSpace graph-Laplacian index
         build_params = _load_best_params(data_dir)
-        self.aspace, self.gl = ArrowSpaceBuilder().build(build_params, self.embs)
-        log.info(
-            "PromptSearchEngine ready — nitems=%d nfeatures=%d nclusters=%d",
-            self.aspace.nitems,
-            self.aspace.nfeatures,
-            self.aspace.nclusters,
-        )
+        builder      = ArrowSpaceBuilder()
+        self.aspace, self.gl = builder.build(self.embs, **build_params)
+
+        PromptSearchEngine._instance = self
 
     @classmethod
     def get(cls) -> "PromptSearchEngine":
         if cls._instance is None:
             from .settings import get_settings
-            data_dir = Path(get_settings().prompt_data_dir).resolve()
-            cls._instance = cls(data_dir)
+            settings = get_settings()
+            cls._instance = cls(Path(settings.prompt_data_dir))
         return cls._instance
 
-    @classmethod
-    def reset(cls) -> None:
-        """Clear the singleton — used in tests."""
-        cls._instance = None
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
 
-    # ── public search ─────────────────────────────────────────────────────────
     def search(
         self,
-        query_vec: np.ndarray,
-        k: int       = 10,
-        tau: float   = DEFAULT_TAU,
-        alpha: float = 0.6,
+        query: np.ndarray,
+        k: int   = 10,
+        tau: float  = DEFAULT_TAU,
+        alpha: float = 0.5,
         lam: float   = LAM,
     ) -> list[dict]:
-        """Run spectral search and MMR rerank.
+        """Return top-k results using ArrowSpace spectral search + MMR re-ranking."""
+        if query.shape[0] != _DIM:
+            raise ValueError(f"Query vector must have dim={_DIM}, got {query.shape[0]}")
 
-        Parameters
-        ----------
-        query_vec : 768-d float64 nomic embedding (already L2-normalised by caller)
-        k         : number of final results after MMR rerank
-        tau       : spectral sharpness passed to aspace.search(vec, gl, tau)
-        alpha     : cosine-vs-salience blend (kept for _mmr); not an aspace param
-        lam       : MMR diversity weight (1.0=pure relevance, 0.0=max diversity)
-        """
-        q = np.asarray(query_vec, dtype=np.float64).ravel()
-        if q.shape[0] != _DIM:
-            raise ValueError(f"query_vec must be {_DIM}-dimensional, got {q.shape[0]}")
+        # 1. spectral retrieval — fetch a larger candidate pool for MMR
+        pool_k   = min(k * 4, len(self.ids))
+        q_dict   = {"vector": query.tolist(), "tau": tau}
+        raw      = self.aspace.search(q_dict, k=pool_k)
+        raw_idxs = [int(r["index"]) for r in raw]
+        raw_sims = np.array([float(r.get("score", 0.0)) for r in raw])
 
-        # aspace.search signature: (vec, gl, tau) — three positional args, no kwargs
-        raw_candidates: list[tuple[int, float]] = self.aspace.search(q, self.gl, tau)
-        candidates = raw_candidates[: k * 3]
-        reranked   = self._mmr(candidates, k, lam)
+        # 2. saliency: upvote / lookback / replicate / view signal blend
+        meta      = {item["id"]: item for item in self.dataset}
+        sal_scores = np.array([
+            (
+                W_UP   * float(meta.get(self.ids[i], {}).get("upvotes",   0)) +
+                W_LK   * float(meta.get(self.ids[i], {}).get("lookbacks", 0)) +
+                W_REP  * float(meta.get(self.ids[i], {}).get("replicates",0)) +
+                W_VIEW * float(meta.get(self.ids[i], {}).get("views",     0))
+            )
+            for i in raw_idxs
+        ])
 
-        out = []
-        for row_idx, score in reranked:
-            pk     = self.ids[row_idx]
-            record = dict(self.dataset_map[pk])
-            # Use plain (non-underscore) keys so Pydantic v2 picks them up
-            # as model fields in PromptSearchResult.
-            record["score"]    = round(score, 6)
-            record["salience"] = round(self.salience.get(pk, 0.0), 6)
-            record["tau"]      = tau
-            out.append(record)
-        return out
+        # 3. combined score
+        combined = (1.0 - SAL_WEIGHT) * _norm(raw_sims) + SAL_WEIGHT * _norm(sal_scores)
 
-    # ── MMR reranker ──────────────────────────────────────────────────────────
-    def _mmr(
-        self,
-        candidates: list[tuple[int, float]],
-        k: int,
-        lam: float,
-    ) -> list[tuple[int, float]]:
-        """Maximal Marginal Relevance with salience boosting.
+        # 4. MMR re-ranking
+        emb_pool   = self.embs[raw_idxs]
+        selected   : list[int] = []
+        remaining  = list(range(len(raw_idxs)))
 
-        rel(i)   = (1 - SAL_WEIGHT) * cosine_score + SAL_WEIGHT * salience
-        mmr(i)   = lam * rel(i) - (1 - lam) * max_sim_to_selected
-
-        lam=1.0  -> pure relevance (no diversity penalty)
-        lam=0.0  -> pure diversity (ignore relevance)
-        Default  -> 0.7 (balances relevance and diversity)
-        """
-        def rel(i: int) -> float:
-            row_idx, cos_score = candidates[i]
-            sal = self.salience.get(self.ids[row_idx], 0.0)
-            return (1 - SAL_WEIGHT) * cos_score + SAL_WEIGHT * sal
-
-        selected:  list[int] = []
-        remaining: list[int] = list(range(len(candidates)))
-
-        while len(selected) < k and remaining:
+        while remaining and len(selected) < k:
             if not selected:
-                best = max(remaining, key=rel)
+                best = int(np.argmax(combined[remaining]))
             else:
-                sel_embs = np.array([self.embs[candidates[i][0]] for i in selected])
-
-                def mmr_score(i: int, _sel: np.ndarray = sel_embs) -> float:
-                    e   = self.embs[candidates[i][0]]
-                    nrm = np.linalg.norm(_sel, axis=1) * np.linalg.norm(e) + 1e-9
-                    sim = float(np.max(_sel @ e / nrm))
-                    return lam * rel(i) - (1 - lam) * sim
-
-                best = max(remaining, key=mmr_score)
-
+                sel_embs    = emb_pool[selected]
+                sim_to_sel  = (emb_pool[remaining] @ sel_embs.T).max(axis=1)
+                mmr_scores  = lam * combined[remaining] - (1.0 - lam) * sim_to_sel
+                best        = remaining[int(np.argmax(mmr_scores))]
             selected.append(best)
             remaining.remove(best)
 
-        return [candidates[i] for i in selected]
+        results = []
+        for rank, pool_i in enumerate(selected):
+            corpus_i = raw_idxs[pool_i]
+            item     = meta.get(self.ids[corpus_i], {})
+            results.append({
+                "rank":      rank + 1,
+                "id":        self.ids[corpus_i],
+                "score":     float(combined[pool_i]),
+                "sim":       float(raw_sims[pool_i]),
+                "saliency":  float(sal_scores[pool_i]),
+                "text":      item.get("text", ""),
+                "tags":      item.get("tags", []),
+                "upvotes":   item.get("upvotes", 0),
+            })
+        return results

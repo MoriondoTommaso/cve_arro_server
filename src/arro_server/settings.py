@@ -1,11 +1,21 @@
+# MODIFIED FILE
+# Original source: Genefold/arro-server (https://github.com/Genefold/arro-server)
+# Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
+# Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
+#   - Added `prompt_data_dir` field for LEAF Kaban data volume path
+#   - Added `embedder_model` field for HuggingFace model id override
+# See CHANGES.md for full modification record.
 from __future__ import annotations
 
+import logging
 from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+log = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -91,6 +101,14 @@ class Settings(BaseSettings):
             out[label] = path
         return out
 
+    def warn_insecure_defaults(self) -> None:
+        """Log a warning if CORS is open to all origins."""
+        if "*" in self.cors_origins:
+            log.warning(
+                "SECURITY: ARRO_SERVER_CORS_ORIGINS is set to '*' (allow all). "
+                "This is unsafe in production — set it to your frontend origin(s)."
+            )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -98,7 +116,9 @@ def get_settings() -> Settings:
 
     Use ``get_settings.cache_clear()`` in tests to reset between cases.
     """
-    return Settings()
+    s = Settings()
+    s.warn_insecure_defaults()
+    return s
 
 
 def reset_settings_cache() -> None:
