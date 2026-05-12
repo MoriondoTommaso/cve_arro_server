@@ -222,3 +222,4 @@ example_data/
 data/
 arrowspace_index/
 notebooks/db.jsonnotebooks/db.json
+.DS_Store
