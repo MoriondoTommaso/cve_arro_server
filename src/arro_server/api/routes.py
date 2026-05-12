@@ -47,10 +47,11 @@ POST /api/prompts/nl_search                  -- LEAF kaban NL search (server emb
 
 from __future__ import annotations
 
-import numpy as np
+import traceback
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import __version__
@@ -270,7 +271,6 @@ def build_index(
             detail="Dataset does not expose a raw array (not a Zarr array handle).",
         )
 
-    # Guard: refuse to materialise arrays that exceed the window budget
     arr_shape = getattr(raw_arr, "shape", None)
     if arr_shape is not None:
         total_elements = 1
@@ -514,34 +514,58 @@ def spot_subgraph_motives(
 
 
 def _get_engine() -> PromptSearchEngine:
+    """Return the PromptSearchEngine singleton, raising a JSON 503 on any failure.
+
+    Catches all exception types so that errors from ArrowSpaceBuilder.build()
+    (ValueError, RuntimeError, library-internal errors) are returned as a
+    proper JSON body instead of the plain-text 'Internal Server Error' that
+    FastAPI emits for unhandled exceptions.
+    """
     try:
         return PromptSearchEngine.get()
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=503,
             detail=(
-                f"Prompt search engine is not ready: {exc}. "
-                "Set ARRO_SERVER_PROMPT_DATA_DIR to the data directory and restart."
+                f"Prompt search engine: required data file not found: {exc}. "
+                "Set ARRO_SERVER_PROMPT_DATA_DIR to the directory that contains "
+                "dataset.json and nomic_embs/ then restart the server."
+            ),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Prompt search engine failed to initialise: "
+                f"{type(exc).__name__}: {exc}"
             ),
         ) from exc
 
 
 def _get_embedder():
+    """Return the EmbedderService singleton, raising a JSON 503 on any failure."""
     try:
         from ..embedder import EmbedderService
         return EmbedderService.get()
-    except (ImportError, Exception) as exc:
+    except Exception as exc:
         raise HTTPException(
             status_code=503,
             detail=(
-                f"Embedder service is not ready: {exc}. "
-                "Ensure sentence-transformers is installed: pip install 'arro-server[nlp]'"
+                f"Embedder service failed to initialise: "
+                f"{type(exc).__name__}: {exc}. "
+                "Ensure sentence-transformers is installed: "
+                "pip install 'arro-server[nlp]'"
             ),
         ) from exc
 
 
 @router.get("/prompts/health")
-def prompts_health() -> dict[str, Any]:
+def prompts_health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    """Return readiness of the prompt engine and embedder.
+
+    Also reports the resolved prompt_data_dir so operators can verify the
+    path without needing server logs.
+    """
     engine_ready   = PromptSearchEngine._instance is not None
     embedder_ready = False
     embedder_model = None
@@ -554,42 +578,51 @@ def prompts_health() -> dict[str, Any]:
         pass
     status = "ready" if (engine_ready and embedder_ready) else "warming"
     return {
-        "status": status,
+        "status":              status,
         "prompt_engine_ready": engine_ready,
-        "embedder_ready": embedder_ready,
-        "embedder_model": embedder_model,
+        "embedder_ready":      embedder_ready,
+        "embedder_model":      embedder_model,
+        # Expose the resolved path so operators can confirm it without logs
+        "prompt_data_dir":     settings.prompt_data_dir,
     }
 
 
 @router.get("/prompts/warm")
 def prompts_warm() -> dict[str, Any]:
-    """Confirm the engine is ready; also warm the embedder if available.
+    """Initialise the search engine (builds ArrowSpace index on first call).
 
-    Returns 200 in both cases — status field distinguishes 'warm' (both
-    ready) from 'engine_only' (embedder not installed / not yet loaded).
-    This avoids a 503 for callers that only need the search engine.
+    Returns 200 with a JSON body in all outcomes:
+    - 'warm'        → engine + embedder both ready
+    - 'engine_only' → engine ready, embedder not installed / not yet loaded
+    - raises 503    → engine failed to initialise (detail contains the error)
     """
-    engine = _get_engine()
+    engine = _get_engine()  # raises JSON 503 on failure
     embedder_ready = False
     try:
         _get_embedder()
         embedder_ready = True
     except HTTPException:
         pass
-    return {
-        "status":         "warm" if embedder_ready else "engine_only",
-        "nitems":         engine.aspace.nitems,
-        "nfeatures":      engine.aspace.nfeatures,
-        "nclusters":      engine.aspace.nclusters,
-        "embedder_ready": embedder_ready,
-    }
+    try:
+        return {
+            "status":         "warm" if embedder_ready else "engine_only",
+            "nitems":         engine.aspace.nitems,
+            "nfeatures":      engine.aspace.nfeatures,
+            "nclusters":      engine.aspace.nclusters,
+            "embedder_ready": embedder_ready,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Engine initialised but failed to read index stats: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @router.get("/prompts/lambdas")
 def prompts_lambdas() -> dict[str, Any]:
     engine = _get_engine()
     try:
-        lambdas = engine.gl.lambdas().tolist()
+        lambdas = engine.aspace.lambdas().tolist()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to compute lambdas: {exc}") from exc
     return {"lambdas": lambdas, "n": len(lambdas)}
@@ -627,7 +660,7 @@ def prompts_audit() -> dict[str, Any]:
         degrees = np.zeros(engine.aspace.nitems)
 
     try:
-        lambdas     = engine.gl.lambdas()
+        lambdas     = engine.aspace.lambdas()
         fiedler_val = float(sorted(lambdas)[1]) if len(lambdas) > 1 else 0.0
     except Exception:
         fiedler_val = 0.0

@@ -27,17 +27,24 @@ FAKE_QUERY = "write a DALL-E prompt for minimalist art"
 
 
 def _fake_record(i: int) -> dict[str, Any]:
+    """Produce a result dict with the same key names that search() emits.
+
+    Uses canonical names (score, _salience) that match PromptSearchResult's
+    AliasChoices so Pydantic v2 deserialises and re-serialises them correctly.
+    """
     return {
-        "id":               f"pk_{i:05d}",
-        "title":            f"Prompt title {i}",
-        "body":             f"Prompt body {i}",
-        "tags":             ["art", "dalle"],
-        "upvotes":          i * 3,
-        "views":            i * 100,
-        "author_reputation": float(i),
-        "_score":           round(0.9 - i * 0.05, 6),
-        "_salience":        round(0.8 - i * 0.05, 6),
-        "_tau":             0.75,
+        "id":        f"pk_{i:05d}",
+        "title":     f"Prompt title {i}",
+        "content":   f"Prompt body {i}",
+        "tags":      ["art", "dalle"],
+        "upvotes":   i * 3,
+        "likes":     i * 2,
+        "uses":      i,
+        "views":     i * 100,
+        # Canonical scoring keys emitted by search() and accepted by
+        # PromptSearchResult via AliasChoices.
+        "score":     round(0.9 - i * 0.05, 6),
+        "_salience": round(0.8 - i * 0.05, 6),
     }
 
 
@@ -159,15 +166,20 @@ class TestNLSearch:
         assert "lam" in data
 
     def test_result_fields(self, client: TestClient):
+        """Check that canonical output keys are present and content/body are in sync."""
         results = client.post(
             "/api/prompts/nl_search", json={"query": FAKE_QUERY}
         ).json()["results"]
         assert len(results) > 0
         first = results[0]
         assert "id" in first
-        assert "_score" in first
-        assert "_salience" in first
-        assert "_tau" in first
+        # Canonical serialised names (Pydantic v2 uses field names, not aliases, on output)
+        assert "score" in first
+        assert "salience" in first
+        # content and body must both be populated (sync validator)
+        assert first.get("content") is not None
+        assert first.get("body") is not None
+        assert first["content"] == first["body"]
 
     def test_empty_query_422(self, client: TestClient):
         r = client.post("/api/prompts/nl_search", json={"query": ""})

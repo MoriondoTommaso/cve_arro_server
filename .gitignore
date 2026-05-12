@@ -117,7 +117,7 @@ rabbitmq-data/
 # ActiveMQ
 activemq-data/
 
-# SageMath
+# SageMaker
 *.sage.py
 
 # Environments
@@ -181,6 +181,9 @@ example_data/
 .DS_Store
 .AppleDouble
 .LSOverride
+# Already-tracked .DS_Store files must be removed locally:
+#   git rm --cached .DS_Store src/arro_server/.DS_Store
+#   git commit -m "chore: stop tracking .DS_Store files"
 
 # ── Project-specific generated / runtime artefacts ──────────────────────────
 # Dataset directories (large binary data — mount via volume in containers)
