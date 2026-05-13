@@ -1174,7 +1174,7 @@ async function runSearch() {
     $("#health").className = "health ok";
 
     $("#search-mode-label").textContent =
-      `τ ${tau.toFixed(2)} · α ${alpha.toFixed(2)} · λ ${lam.toFixed(2)}`;
+      `τ ${tau.toFixed(2)} · semantic ${alpha.toFixed(2)} · diversity ${lam.toFixed(2)}`;
 
     $("#search-hint").textContent =
       `${result.result_count || 0} semantic results`;
@@ -1273,8 +1273,8 @@ function renderPromptCard(item, index) {
         </strong>
 
         <div class="prompt-score-wrap">
-          <span class="prompt-score-value">
-            ${(item.score ?? 0).toFixed(4)}
+          <span class="prompt-score">
+            Score: ${(item.score ?? 0).toFixed(4)}
           </span>
 
           <div class="prompt-score-bar">
@@ -2042,6 +2042,8 @@ renderRecentSearches();
 function renderRecentSearches() {
   const el = $("#recent-searches");
 
+  if (!el) return;
+
   if (!state.recentSearches.length) {
     el.innerHTML = `
       <span class="signal-empty">
@@ -2056,6 +2058,7 @@ function renderRecentSearches() {
       (query) => `
         <button
           class="recent-search-chip"
+          type="button"
           data-query="${escapeHtml(query)}"
         >
           ${escapeHtml(query)}
