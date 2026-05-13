@@ -52,8 +52,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import scipy.sparse as sp              
+import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import __version__
@@ -726,13 +728,134 @@ def prompts_audit() -> dict[str, Any]:
         print(f"[error] Laplacian reconstruction failed: {e}")
 
     # 6. Dimension Reduction for Visualization
+    #
+    # The graph Laplacian is built over the *feature* axis (n_nodes == nfeatures,
+    # e.g. 768) — not over the corpus rows. The audit manifold colours each node
+    # by its true L_ii degree, so the PCA used for layout must produce exactly
+    # n_nodes points. We therefore PCA the columns of the embedding matrix
+    # (each feature gets a vector of length nitems) when n_nodes matches
+    # nfeatures, and otherwise fall back to PCA over rows.
     try:
         pca = PCA(n_components=2)
-        coords = pca.fit_transform(engine.embs).tolist()
-        explained_variance = pca.explained_variance_ratio_.tolist()
-    except Exception:
-        coords = []
+        if n > 0 and hasattr(engine, "embs") and engine.embs is not None:
+            embs = np.asarray(engine.embs)
+            if embs.shape[1] == n:
+                node_vecs = embs.T          # (n_nodes, nitems) — one row per feature/node
+            elif embs.shape[0] == n:
+                node_vecs = embs            # (n_nodes, nfeatures) — one row per sample/node
+            else:
+                # Mismatched shapes: degrade gracefully — surface still renders below
+                node_vecs = embs[:n] if embs.shape[0] >= n else embs
+            coords = pca.fit_transform(node_vecs)
+            explained_variance = pca.explained_variance_ratio_.tolist()
+            coords_list = coords.tolist()
+        else:
+            coords = np.zeros((0, 2))
+            coords_list = []
+            explained_variance = []
+    except Exception as exc:
+        print(f"[warn] PCA over graph nodes failed: {exc}")
+        coords = np.zeros((0, 2))
+        coords_list = []
         explained_variance = []
+
+    # 7. Pre-compute Graph Laplacian Manifold (server-side, mirrors the
+    #    reference Python script). The frontend renders this payload directly
+    #    via Plotly Surface + Scatter3d hubs — no IDW guessing in the browser.
+    laplacian_manifold: dict[str, Any] | None = None
+    pc1_pct: float | None = None
+    pc2_pct: float | None = None
+    if explained_variance:
+        pc1_pct = float(explained_variance[0] * 100) if len(explained_variance) > 0 else None
+        pc2_pct = float(explained_variance[1] * 100) if len(explained_variance) > 1 else None
+    try:
+        if n > 0 and coords.shape[0] == n and float(degrees.std()) > 0.0:
+            x_pts = np.asarray(coords[:, 0], dtype=np.float64)
+            y_pts = np.asarray(coords[:, 1], dtype=np.float64)
+            deg_arr = np.asarray(degrees, dtype=np.float64)
+
+            p05, p95 = np.percentile(deg_arr, [5, 95])
+            z_pts = np.clip(deg_arr, p05, p95)
+
+            grid_res = 100 if n > 5000 else 120
+            x_min, x_max = float(x_pts.min()), float(x_pts.max())
+            y_min, y_max = float(y_pts.min()), float(y_pts.max())
+            # guard against degenerate spans
+            if x_max - x_min < 1e-9:
+                x_max = x_min + 1e-6
+            if y_max - y_min < 1e-9:
+                y_max = y_min + 1e-6
+            xi = np.linspace(x_min, x_max, grid_res)
+            yi = np.linspace(y_min, y_max, grid_res)
+            Xi, Yi = np.meshgrid(xi, yi)
+
+            pts_xy = np.column_stack([x_pts, y_pts])
+            Zi = griddata(pts_xy, z_pts, (Xi, Yi), method="cubic")
+            mask = np.isnan(Zi)
+            if mask.any():
+                Zi_nn = griddata(pts_xy, z_pts, (Xi, Yi), method="nearest")
+                Zi = np.where(mask, Zi_nn, Zi)
+            Zi = gaussian_filter(Zi, sigma=2.5)
+
+            # Hubs: top 15% by degree, like the reference script.
+            hub_thr = float(np.percentile(deg_arr, 85))
+            hub_mask = deg_arr > hub_thr
+            hub_idx = np.flatnonzero(hub_mask)
+            hub_x = x_pts[hub_idx]
+            hub_y = y_pts[hub_idx]
+            hub_z = deg_arr[hub_idx]
+            ids_list = engine.ids if hasattr(engine, "ids") else []
+            hub_text = []
+            for i in hub_idx.tolist():
+                label = ids_list[i] if i < len(ids_list) else None
+                if label is None:
+                    label = f"node {i}"
+                hub_text.append(f"{label} (Lᵢᵢ={float(deg_arr[i]):.3f})")
+
+            x_label = f"PC1 ({pc1_pct:.1f}%)" if pc1_pct is not None else "PC1"
+            y_label = f"PC2 ({pc2_pct:.1f}%)" if pc2_pct is not None else "PC2"
+            subtitle = (
+                f"Node connectivity as proxy for local manifold curvature "
+                f"(PC1 {pc1_pct:.1f}%, PC2 {pc2_pct:.1f}%)"
+                if pc1_pct is not None and pc2_pct is not None
+                else "Node connectivity as proxy for local manifold curvature"
+            )
+
+            laplacian_manifold = {
+                "n_nodes": int(n),
+                "x_grid": xi.tolist(),
+                "y_grid": yi.tolist(),
+                "z_grid": Zi.tolist(),
+                "x_label": x_label,
+                "y_label": y_label,
+                "subtitle": subtitle,
+                "degree_p05": float(p05),
+                "degree_p95": float(p95),
+                "degree_min": float(deg_arr.min()),
+                "degree_max": float(deg_arr.max()),
+                "degree_std": float(deg_arr.std()),
+                "hub_threshold": hub_thr,
+                "hub_x": hub_x.tolist(),
+                "hub_y": hub_y.tolist(),
+                "hub_z": hub_z.tolist(),
+                "hub_degree": hub_z.tolist(),
+                "hub_text": hub_text,
+                "title": f"Graph Laplacian Manifold ({int(n)} nodes)",
+            }
+            print(
+                f"[audit] laplacian_manifold built: n_nodes={n} grid={grid_res} "
+                f"deg min/max/std={float(deg_arr.min()):.4f}/{float(deg_arr.max()):.4f}/"
+                f"{float(deg_arr.std()):.4f} hubs={int(hub_mask.sum())}"
+            )
+        else:
+            print(
+                f"[audit] laplacian_manifold skipped: n_nodes={n} "
+                f"coords_rows={int(coords.shape[0]) if hasattr(coords,'shape') else 0} "
+                f"deg_std={float(degrees.std()) if n>0 else 0.0:.6g}"
+            )
+    except Exception as exc:
+        print(f"[warn] laplacian_manifold pre-compute failed: {exc}")
+        laplacian_manifold = None
 
     # Build-time graph params used to construct ArrowSpace, exposed so the
     # frontend can display the manifold/build settings in sync with the engine.
@@ -778,10 +901,11 @@ def prompts_audit() -> dict[str, Any]:
             "fiedler_value": float(fiedler_val),
             "spectral_gap": float(spectral_gap)
         },
-        "pca_2d": coords,
+        "pca_2d": coords_list,
         "pca_explained_variance": explained_variance,
         "ids": engine.ids if hasattr(engine, 'ids') else [],
         "build_params": build_params,
+        "laplacian_manifold": laplacian_manifold,
     }
     # Stash on the engine singleton so subsequent calls return instantly.
     try:

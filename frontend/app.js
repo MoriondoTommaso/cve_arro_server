@@ -3,6 +3,11 @@
 
 const $ = (sel) => document.querySelector(sel);
 
+// Internal defaults for parameters no longer exposed in the UI.
+// Backend schemas use tau=0.75 and lam=0.7 as defaults.
+const DEFAULT_TAU = 0.75;
+const DEFAULT_LAM = 0.7;
+
 const state = {
   datasets: [],
   selected: null,        // dataset summary
@@ -57,8 +62,8 @@ async function runPromptNLSearch(query) {
     body: JSON.stringify({
       query,
       k: Number($("#topk-select")?.value || 50),
-      tau: 0.8,
-      lam: 0.7,
+      tau: DEFAULT_TAU,
+      lam: DEFAULT_LAM,
     }),
   });
 }
@@ -1117,8 +1122,13 @@ async function buildDatasetIndex(datasetId) {
 }
 
 
+function setText(sel, text) {
+  const el = $(sel);
+  if (el) el.textContent = text;
+}
+
 async function runSearch() {
-  const query = $("#filter").value.trim();
+  const query = ($("#filter")?.value ?? "").trim();
 
   state.searchQuery = query;
 
@@ -1152,11 +1162,11 @@ async function runSearch() {
   }
 
   try {
-    $("#health").textContent = "Searching...";
+    setText("#health", "Searching...");
 
-    const tau = Number($("#spectral-slider").value);
-    const alpha = Number($("#alpha-slider").value);
-    const lam = Number($("#lam-slider").value);
+    const tau = DEFAULT_TAU;
+    const alpha = Number($("#alpha-slider")?.value ?? 0.6);
+    const lam = DEFAULT_LAM;
     const salience = Number($("#salience-slider")?.value ?? 0.3);
 
     $("#grid").innerHTML = `
@@ -1193,20 +1203,27 @@ async function runSearch() {
 
     await renderSearchVisualizations(result.results || []);
 
-    $("#health").textContent = "LEAF Ready";
-    $("#health").className = "health ok";
+    const healthEl = $("#health");
+    if (healthEl) {
+      healthEl.textContent = "LEAF Ready";
+      healthEl.className = "health ok";
+    }
 
-    $("#search-mode-label").textContent =
-      `τ ${tau.toFixed(2)} · α ${alpha.toFixed(2)} (spectral↔cosine) · sal ${salience.toFixed(2)} · λ ${lam.toFixed(2)}`;
+    setText(
+      "#search-mode-label",
+      `α ${alpha.toFixed(2)} (spectral↔cosine) · sal ${salience.toFixed(2)}`
+    );
 
-    $("#search-hint").textContent =
-      `${result.result_count || 0} semantic results`;
+    setText("#search-hint", `${result.result_count || 0} semantic results`);
 
   } catch (e) {
     console.error(e);
 
-    $("#health").textContent = "Search Error";
-    $("#health").classList.add("err");
+    const healthEl = $("#health");
+    if (healthEl) {
+      healthEl.textContent = "Search Error";
+      healthEl.classList.add("err");
+    }
 
     $("#grid").innerHTML = `
       <div class="error-screen">
@@ -1244,11 +1261,6 @@ function renderPromptResults(results, analytics = {}) {
         </div>
 
         <div>
-          <span>Tau</span>
-          <strong>${analytics.tau?.toFixed?.(2) ?? "—"}</strong>
-        </div>
-
-        <div>
           <span>Alpha (spectral↔cosine)</span>
           <strong>${analytics.alpha?.toFixed?.(2) ?? "—"}</strong>
         </div>
@@ -1256,11 +1268,6 @@ function renderPromptResults(results, analytics = {}) {
         <div>
           <span>Salience</span>
           <strong>${analytics.salience?.toFixed?.(2) ?? "—"}</strong>
-        </div>
-
-        <div>
-          <span>MMR λ (diversity)</span>
-          <strong>${analytics.lam?.toFixed?.(2) ?? "—"}</strong>
         </div>
       </div>
         ${results
@@ -1480,8 +1487,8 @@ async function loadAuditPanel() {
     const [health, graph, lambdas, audit] = await Promise.all([
       api("/api/prompts/health"),
       api("/api/prompts/graph_laplacian"),
-      _getCachedLambdas(),
-      _getCachedAudit(),
+      api("/api/prompts/lambdas"),
+      api("/api/prompts/audit"),
     ]);
 
     $("#health").textContent = "LEAF Ready";
@@ -1489,11 +1496,30 @@ async function loadAuditPanel() {
 
     renderAuditHealth(health);
     renderAuditGraph(graph);
-    renderAuditStats(audit);
     renderAuditLambdas(audit, lambdas);
-    renderAuditPCA(audit);
+    renderAuditStats(audit);
+
     renderAuditManifold(audit);
     renderAuditSpectral(audit, lambdas);
+    renderAuditPCA(audit);
+
+    // The audit view was hidden when loadAuditPanel started. Although it is
+    // visible by the time Plotly.newPlot fires, some browsers cache a zero
+    // size from the first layout pass. Force a resize on the next animation
+    // frame so the manifold + fingerprint cards fill their containers.
+    requestAnimationFrame(() => {
+      try {
+        const ids = ["audit-query-manifold", "audit-spectral-fingerprint"];
+        for (const id of ids) {
+          const node = document.getElementById(id);
+          if (node && window.Plotly && node.data) {
+            window.Plotly.Plots.resize(node);
+          }
+        }
+      } catch (resizeErr) {
+        console.warn("Plotly resize failed:", resizeErr);
+      }
+    });
 
   } catch (e) {
     console.error(e);
@@ -1580,45 +1606,94 @@ function renderAuditLambdas(audit, lambdaData) {
 
   if (!container) return;
 
-  // Spectral Diagnostics is sourced strictly from /api/prompts/audit's
-  // spectral_stats block. Fiedler / spectral gap come from the normalised
-  // Laplacian eigensolve on the backend; we never derive them from the
-  // /lambdas sample histogram (which can include zeros and mislead).
-  const spectral = audit?.spectral_stats || {};
-  const fiedler = Number(spectral.fiedler_value ?? 0);
-  const gap = Number(spectral.spectral_gap ?? 0);
+  // Spectral Diagnostics reads strictly from /api/prompts/audit (spectral_stats).
+  // Fiedler / spectral gap come from the normalised Laplacian eigensolve on
+  // the backend. The lambda sample count is taken from whichever array is
+  // actually used to render the Spectral Fingerprint plot so the numbers
+  // stay in sync.
+  const spectral = (audit && audit.spectral_stats) || {};
 
-  const fiedlerColor = fiedler > 0.01
-    ? "#34d399"
-    : fiedler > 0.001
-      ? "#facc15"
-      : "#f87171";
+  const readNumber = (...candidates) => {
+    for (const v of candidates) {
+      if (v === null || v === undefined) continue;
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
 
-  const lambdaSamples = Array.isArray(lambdaData?.lambdas)
-    ? lambdaData.lambdas.length
-    : 0;
+  const fiedler = readNumber(
+    spectral.fiedler_value,
+    spectral.fiedlerValue,
+    spectral.fiedler,
+    spectral.lambda2,
+  );
+  const gap = readNumber(
+    spectral.spectral_gap,
+    spectral.spectralGap,
+    spectral.gap,
+  );
+
+  const fmt = (v) => (v === null ? "—" : v.toFixed(6));
+  const fiedlerColor =
+    fiedler === null
+      ? "#9aa6bd"
+      : fiedler > 0.01
+        ? "#34d399"
+        : fiedler > 0.001
+          ? "#facc15"
+          : "#f87171";
+
+  // Match the source the fingerprint plot uses: audit.eigenvalues when
+  // present, else /api/prompts/lambdas. Falsy fallback to "—" only when no
+  // array exists at all.
+  const lambdaArr = Array.isArray(audit?.eigenvalues) && audit.eigenvalues.length
+    ? audit.eigenvalues
+    : Array.isArray(lambdaData?.lambdas)
+      ? lambdaData.lambdas
+      : null;
+  const lambdaSamples = lambdaArr ? lambdaArr.length : null;
+
+  // Prefer an explicit source label from the endpoint; otherwise summarise
+  // build params or fall back to a neutral label. Never imply a normalised
+  // Laplacian if the endpoint did not say so.
+  let source = "—";
+  if (typeof spectral.source === "string" && spectral.source.trim()) {
+    source = spectral.source.trim();
+  } else if (audit?.build_params && typeof audit.build_params === "object") {
+    const bp = audit.build_params;
+    const parts = [];
+    if (bp.k != null) parts.push(`k=${bp.k}`);
+    if (bp.eps != null) parts.push(`eps=${Number(bp.eps).toFixed(3)}`);
+    if (bp.p != null) parts.push(`p=${bp.p}`);
+    source = parts.length ? `graph L (${parts.join(", ")})` : "audit endpoint";
+  } else if (audit?.graph_stats?.n_nodes) {
+    source = `audit endpoint · n=${audit.graph_stats.n_nodes}`;
+  } else {
+    source = "audit endpoint";
+  }
 
   container.innerHTML = `
     <div class="signal-card">
       <span class="signal-label">Fiedler Value</span>
       <strong style="color:${fiedlerColor}">
-        ${fiedler.toFixed(6)}
+        ${fmt(fiedler)}
       </strong>
     </div>
 
     <div class="signal-card">
       <span class="signal-label">Spectral Gap</span>
-      <strong>${gap.toFixed(6)}</strong>
+      <strong>${fmt(gap)}</strong>
     </div>
 
     <div class="signal-card">
       <span class="signal-label">λ Samples</span>
-      <strong>${lambdaSamples || "—"}</strong>
+      <strong>${lambdaSamples == null ? "—" : lambdaSamples}</strong>
     </div>
 
     <div class="signal-card">
       <span class="signal-label">Source</span>
-      <strong>normalized L</strong>
+      <strong>${source}</strong>
     </div>
   `;
 }
@@ -1778,24 +1853,262 @@ function renderAuditPCA(audit) {
     switchView("search");
 
     const filter = $("#filter");
-    filter.value = clicked.id;
+    if (filter) filter.value = clicked.id;
 
-    $("#search-hint").textContent =
-    `Searching selected PCA prompt ${clicked.id}...`;
+    setText("#search-hint", `Searching selected PCA prompt ${clicked.id}...`);
 
     runSearch();
   };
 }
 
+function renderAuditManifold3D(audit) {
+  const el = document.getElementById("audit-manifold-3d");
+  if (!el || !audit?.pca_2d || !window.Plotly) return;
+
+  const points = audit.pca_2d;
+  const degrees = audit.degrees || points.map(() => 1);
+
+  const xs = points.map((p) => Number(p[0]));
+  const ys = points.map((p) => Number(p[1]));
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+
+  const gridSize = 40;
+  const z = [];
+  const sigma2 = Math.pow((rangeX + rangeY) * 0.08, 2);
+
+  for (let gy = 0; gy < gridSize; gy++) {
+    const row = [];
+    for (let gx = 0; gx < gridSize; gx++) {
+      const gxVal = minX + (rangeX * gx) / (gridSize - 1);
+      const gyVal = minY + (rangeY * gy) / (gridSize - 1);
+      let val = 0, wSum = 0;
+      for (let i = 0; i < points.length; i += 10) {
+        const dx = gxVal - xs[i], dy = gyVal - ys[i];
+        const w = Math.exp(-(dx * dx + dy * dy) / sigma2);
+        val += w * Number(degrees[i] || 1);
+        wSum += w;
+      }
+      row.push(wSum > 1e-10 ? val / wSum : 0);
+    }
+    z.push(row);
+  }
+
+  Plotly.newPlot(el, [{
+    z,
+    type: "surface",
+    colorscale: [[0,"#0f1f3d"],[0.4,"#1e3a8a"],[0.7,"#2563eb"],[1,"#ef4444"]],
+    opacity: 0.92,
+    colorbar: {
+      title: "Node Degree (Lᵢᵢ)",
+      titlefont: { color: "#cbd5e1", size: 11 },
+      tickfont: { color: "#cbd5e1" }
+    }
+  }], {
+    paper_bgcolor: "rgba(0,0,0,0)",
+    scene: {
+      xaxis: { title: "PCA 1", color: "#cbd5e1", gridcolor: "rgba(255,255,255,0.1)" },
+      yaxis: { title: "PCA 2", color: "#cbd5e1", gridcolor: "rgba(255,255,255,0.1)" },
+      zaxis: { title: "Degree", color: "#cbd5e1", gridcolor: "rgba(255,255,255,0.1)" },
+      bgcolor: "rgba(15,23,42,0.65)",
+      camera: { eye: { x: 1.5, y: 1.6, z: 0.75 } }
+    },
+    margin: { l: 0, r: 0, t: 10, b: 0 }
+  }, { responsive: true, displayModeBar: false });
+}
+
 function renderAuditManifold(audit) {
-  renderQueryManifold(audit, new Set(), "#audit-query-manifold");
-  // Reflect server-side build params (eps/k/topk/p/sigma) in any display chips.
+  const el = document.getElementById("audit-query-manifold");
+  const showError = (msg) => {
+    if (!el) return;
+    el.innerHTML = `<div class="manifold-empty-msg">${msg}</div>`;
+  };
+
+  if (!el) return;
+  if (!window.Plotly) {
+    showError("Plotly failed to load — cannot render Graph Laplacian Manifold.");
+    return;
+  }
+
+  // Reflect server-side build params (eps/k/topk/p/sigma) regardless of which
+  // rendering path runs below.
   const bpEl = document.getElementById("build-params-display");
   if (bpEl && audit?.build_params) {
     const bp = audit.build_params;
     const fmt = (v) => (v === null || v === undefined ? "None" : String(v));
     bpEl.innerHTML = `<code>eps=${fmt(bp.eps)} · k=${fmt(bp.k)} · topk=${fmt(bp.topk)} · p=${fmt(bp.p)} · sigma=${fmt(bp.sigma)}</code>`;
   }
+
+  // Prefer the server-precomputed Laplacian manifold (z_grid + hubs). When
+  // present, render it directly — exact parity with the reference Python
+  // Plotly script. This bypasses the browser-side IDW path that was hitting
+  // "degree variance ≈ 0" when degrees/pca_2d lengths disagreed.
+  const lm = audit?.laplacian_manifold;
+  if (lm && Array.isArray(lm.z_grid) && lm.z_grid.length) {
+    renderServerLaplacianManifold(audit, lm, el);
+    return;
+  }
+
+  // Fallback: old browser-side IDW rendering (kept for resilience).
+  const points = Array.isArray(audit?.pca_2d) ? audit.pca_2d : null;
+  const degrees = Array.isArray(audit?.degrees) ? audit.degrees : null;
+  if (!points || !points.length) {
+    showError("Graph Laplacian Manifold unavailable: missing pca_2d from /api/prompts/audit.");
+    return;
+  }
+  if (!degrees || !degrees.length) {
+    showError("Graph Laplacian Manifold unavailable: missing degrees from /api/prompts/audit.");
+    return;
+  }
+  if (degrees.length !== points.length) {
+    console.warn(
+      `[audit] degrees/pca_2d length mismatch: ${degrees.length} vs ${points.length}; falling back to client IDW.`,
+    );
+  }
+  renderQueryManifold(audit, new Set(), "#audit-query-manifold");
+
+  try {
+    const titleEl = el.parentElement?.querySelector("h3");
+    if (titleEl) {
+      const n = points.length;
+      const ex = audit?.pca_explained_variance || [];
+      const pc1 = ex[0] != null ? (ex[0] * 100).toFixed(1) : null;
+      const pc2 = ex[1] != null ? (ex[1] * 100).toFixed(1) : null;
+      const subtitle = pc1 && pc2
+        ? ` — Node connectivity as proxy for local manifold curvature (PC1 ${pc1}%, PC2 ${pc2}%)`
+        : "";
+      titleEl.textContent = `Graph Laplacian Manifold (${n} nodes)${subtitle}`;
+    }
+  } catch (_) {}
+}
+
+// Render the server-precomputed Laplacian manifold (Plotly Surface + hub
+// Scatter3d). Mirrors the reference Python script visual: dark scene, cubic
+// griddata surface, projected contours, top-15% hubs as markers.
+function renderServerLaplacianManifold(audit, lm, el) {
+  const zMin = Number(lm.degree_p05);
+  const zMax = Number(lm.degree_p95);
+  const colorscale = [
+    [0.0, "#1e3a8a"],
+    [0.25, "#2c5dff"],
+    [0.5, "#f8fafc"],
+    [0.75, "#fb7185"],
+    [1.0, "#ef4444"],
+  ];
+
+  const surface = {
+    x: lm.x_grid,
+    y: lm.y_grid,
+    z: lm.z_grid,
+    type: "surface",
+    colorscale,
+    cmin: zMin,
+    cmax: zMax,
+    opacity: 0.94,
+    showscale: true,
+    colorbar: {
+      title: { text: "Curvature (Lᵢᵢ)", font: { color: "#cbd5e1", size: 12 } },
+      tickfont: { color: "#cbd5e1" },
+      thickness: 14,
+      len: 0.78,
+      x: 1.02,
+    },
+    contours: {
+      z: {
+        show: true,
+        usecolormap: true,
+        highlightcolor: "#ffffff",
+        project: { z: true },
+      },
+    },
+    lighting: {
+      ambient: 0.65,
+      diffuse: 0.85,
+      specular: 0.18,
+      roughness: 0.55,
+    },
+    name: "Laplacian surface",
+  };
+
+  const hubLift = zMax + (zMax - zMin) * 0.06;
+  const hubsTrace = {
+    x: lm.hub_x,
+    y: lm.hub_y,
+    z: lm.hub_x.map(() => hubLift),
+    type: "scatter3d",
+    mode: "markers",
+    name: "High-degree hubs (top 15%)",
+    text: lm.hub_text,
+    hoverinfo: "text",
+    marker: {
+      size: 4.5,
+      color: "#fbbf24",
+      line: { color: "#ffffff", width: 0.6 },
+      symbol: "diamond",
+    },
+  };
+
+  const data = [surface, hubsTrace];
+
+  Plotly.newPlot(
+    el,
+    data,
+    {
+      paper_bgcolor: "rgba(0,0,0,0)",
+      font: { color: "#cbd5e1" },
+      scene: {
+        xaxis: {
+          title: lm.x_label || "PC1",
+          gridcolor: "rgba(255,255,255,0.10)",
+          zerolinecolor: "rgba(255,255,255,0.18)",
+          color: "#cbd5e1",
+        },
+        yaxis: {
+          title: lm.y_label || "PC2",
+          gridcolor: "rgba(255,255,255,0.10)",
+          zerolinecolor: "rgba(255,255,255,0.18)",
+          color: "#cbd5e1",
+        },
+        zaxis: {
+          title: "Curvature (Lᵢᵢ)",
+          gridcolor: "rgba(255,255,255,0.10)",
+          zerolinecolor: "rgba(255,255,255,0.18)",
+          color: "#cbd5e1",
+          range: [zMin, hubLift + (zMax - zMin) * 0.18],
+        },
+        bgcolor: "rgba(15,23,42,0.92)",
+        aspectmode: "manual",
+        aspectratio: { x: 1.35, y: 1.1, z: 0.85 },
+        camera: {
+          eye: { x: 1.55, y: 1.55, z: 0.95 },
+          up: { x: 0, y: 0, z: 1 },
+        },
+      },
+      margin: { l: 0, r: 0, t: 20, b: 0 },
+      legend: {
+        font: { color: "#cbd5e1" },
+        orientation: "h",
+        x: 0,
+        y: 1.04,
+        bgcolor: "rgba(15,23,42,0)",
+      },
+    },
+    {
+      responsive: true,
+      displayModeBar: false,
+    }
+  );
+
+  try {
+    const titleEl = el.parentElement?.querySelector("h3");
+    if (titleEl) {
+      const title = lm.title || `Graph Laplacian Manifold (${lm.n_nodes} nodes)`;
+      const sub = lm.subtitle ? ` — ${lm.subtitle}` : "";
+      titleEl.textContent = `${title}${sub}`;
+    }
+  } catch (_) {}
 }
 
 function renderAuditSpectral(audit, lambdas) {
@@ -1960,7 +2273,9 @@ function switchView(viewName) {
 
   if (viewName === "audit") {
     searchView.classList.add("hidden");
+    searchView.classList.remove("active-view");
     auditView.classList.remove("hidden");
+    auditView.classList.add("active-view");
 
     searchTab.classList.remove("active");
     auditTab.classList.add("active");
@@ -1970,28 +2285,61 @@ function switchView(viewName) {
   }
 
   auditView.classList.add("hidden");
+  auditView.classList.remove("active-view");
   searchView.classList.remove("hidden");
+  searchView.classList.add("active-view");
 
   auditTab.classList.remove("active");
   searchTab.classList.add("active");
+
+  // Force a Plotly resize for the search-view charts after they become
+  // visible again, otherwise some browsers keep a zero-sized layout cached
+  // from the hidden state.
+  requestAnimationFrame(() => {
+    try {
+      const ids = ["query-manifold", "query-lambda-chart"];
+      for (const id of ids) {
+        const node = document.getElementById(id);
+        if (node && window.Plotly && node.data) {
+          window.Plotly.Plots.resize(node);
+        }
+      }
+    } catch (resizeErr) {
+      console.warn("Plotly resize failed:", resizeErr);
+    }
+  });
 }
+
+// Resize Plotly charts whenever the window resizes, so all stable-height
+// containers stay properly fitted on responsive layout changes.
+let _leafResizeTimer = null;
+window.addEventListener("resize", () => {
+  if (!window.Plotly) return;
+  clearTimeout(_leafResizeTimer);
+  _leafResizeTimer = setTimeout(() => {
+    const ids = [
+      "query-manifold",
+      "query-lambda-chart",
+      "audit-query-manifold",
+      "audit-spectral-fingerprint",
+    ];
+    for (const id of ids) {
+      const node = document.getElementById(id);
+      if (node && node.data) {
+        try {
+          window.Plotly.Plots.resize(node);
+        } catch (_) { /* noop */ }
+      }
+    }
+  }, 120);
+});
 
 
 function wireControls() {
   const alphaSlider = $("#alpha-slider");
   if (alphaSlider) {
     alphaSlider.addEventListener("input", (e) => {
-      $("#alpha-value").textContent = Number(e.target.value).toFixed(2);
-
-      clearTimeout(state.searchTimer);
-      state.searchTimer = setTimeout(runSearch, 300);
-    });
-  }
-
-  const lamSlider = $("#lam-slider");
-  if (lamSlider) {
-    lamSlider.addEventListener("input", (e) => {
-      $("#lam-value").textContent = Number(e.target.value).toFixed(2);
+      setText("#alpha-value", Number(e.target.value).toFixed(2));
 
       clearTimeout(state.searchTimer);
       state.searchTimer = setTimeout(runSearch, 300);
@@ -2001,7 +2349,7 @@ function wireControls() {
   const salienceSlider = $("#salience-slider");
   if (salienceSlider) {
     salienceSlider.addEventListener("input", (e) => {
-      $("#salience-value").textContent = Number(e.target.value).toFixed(2);
+      setText("#salience-value", Number(e.target.value).toFixed(2));
 
       clearTimeout(state.searchTimer);
       state.searchTimer = setTimeout(runSearch, 300);
@@ -2030,23 +2378,10 @@ function wireControls() {
     });
   }
 
-  const spectralSlider = $("#spectral-slider");
-  if (spectralSlider) {
-    spectralSlider.addEventListener("input", (e) => {
-      state.spectralWeight = Number(e.target.value);
-
-      $("#spectral-value").textContent =
-        state.spectralWeight.toFixed(2);
-
-      clearTimeout(state.searchTimer);
-      state.searchTimer = setTimeout(runSearch, 300);
-    });
-  }
-
   const topkSelect = $("#topk-select");
   if (topkSelect) {
     topkSelect.addEventListener("change", (e) => {
-      $("#topk-value").textContent = e.target.value;
+      setText("#topk-value", e.target.value);
 
       clearTimeout(state.searchTimer);
       state.searchTimer = setTimeout(runSearch, 300);
@@ -2076,22 +2411,63 @@ function wireControls() {
 renderRecentSearches();
 
 
+function purgeStaleSliderCards() {
+  // Defensive purge: if a cached or proxied copy of the old HTML is loaded,
+  // remove the obsolete Tau / Result Diversity / MMR slider cards so the
+  // rendered UI matches the current spec (alpha + salience visible only).
+  // Never remove a card that still hosts a live control we depend on.
+  const PROTECTED_IDS = [
+    "alpha-slider",
+    "salience-slider",
+    "topk-select",
+    "alpha-value",
+    "salience-value",
+    "topk-value",
+  ];
+  const isProtected = (card) =>
+    PROTECTED_IDS.some((pid) => card.querySelector("#" + pid));
+
+  const STALE_IDS = ["spectral-slider", "lam-slider", "tau-slider"];
+  for (const id of STALE_IDS) {
+    const el = document.getElementById(id);
+    if (el) {
+      const card = el.closest(".spectral-control") || el.parentElement;
+      if (card && card.remove && !isProtected(card)) card.remove();
+    }
+  }
+  const STALE_LABEL_RE =
+    /(Tau spectral sharpness|Result Diversity|λ\s*MMR|MMR\s*λ|spectral sharpness)/i;
+  document.querySelectorAll(".spectral-control").forEach((card) => {
+    if (isProtected(card)) return;
+    const label = card.querySelector("label, strong, h3, .spectral-label-row");
+    if (label && STALE_LABEL_RE.test(label.textContent || "")) {
+      card.remove();
+    }
+  });
+}
+
 (async function main() {
+  purgeStaleSliderCards();
   wireControls();
 
   try {
     const health = await api("/api/prompts/health");
 
-    $("#health").textContent =
-      health.status === "ready" ? "LEAF Ready" : "LEAF Warming...";
-
-    $("#health").className =
-      health.status === "ready" ? "health ok" : "health";
+    const el = $("#health");
+    if (el) {
+      el.textContent =
+        health.status === "ready" ? "LEAF Ready" : "LEAF Warming...";
+      el.className =
+        health.status === "ready" ? "health ok" : "health";
+    }
   } catch (e) {
     console.error("Health check failed:", e);
 
-    $("#health").textContent = "Backend offline";
-    $("#health").className = "health err";
+    const el = $("#health");
+    if (el) {
+      el.textContent = "Backend offline";
+      el.className = "health err";
+    }
   }
 })();
 
@@ -2125,7 +2501,8 @@ function renderRecentSearches() {
 
   el.querySelectorAll(".recent-search-chip").forEach((btn) => {
     btn.addEventListener("click", () => {
-      $("#filter").value = btn.dataset.query;
+      const filter = $("#filter");
+      if (filter) filter.value = btn.dataset.query;
       runSearch();
     });
   });
@@ -2191,7 +2568,7 @@ function _idwGrid(xs, ys, zs, gridSize, power = 2) {
   const dy = (maxY - minY) || 1;
   const stride = Math.max(1, Math.floor(xs.length / 4000));
   // smoothing length proportional to grid cell size
-  const sigma2 = Math.pow((dx + dy) / (2 * gridSize), 2) * 4;
+  const sigma2 = Math.pow((dx + dy) * 0.12, 2);
 
   const gridX = new Array(gridSize);
   const gridY = new Array(gridSize);
@@ -2238,14 +2615,17 @@ function renderQueryManifold(audit, resultIds, target = "#query-manifold") {
   if (!Array.isArray(degrees) || degrees.length !== points.length) {
     degrees = new Array(points.length).fill(1);
   }
+
   const degArr = degrees.map(Number);
 
-  // Robust degree clipping (p02..p98). A handful of hubs in a 20k corpus
-  // otherwise wash the surface flat.
+
   const sortedDeg = [...degArr].sort((a, b) => a - b);
-  const p02 = _quantile(sortedDeg, 0.02);
-  const p98 = _quantile(sortedDeg, 0.98);
-  const degClipped = degArr.map((d) => Math.min(Math.max(d, p02), p98));
+  const p05 = _quantile(sortedDeg, 0.05);
+  const p95 = _quantile(sortedDeg, 0.95);
+  const degRange = Math.max(p95 - p05, 1e-6);
+  const degClipped = degArr.map(d =>
+    (Math.min(Math.max(d, p05), p95) - p05) / degRange
+  );
 
   const xs = points.map((p) => Number(p[0]));
   const ys = points.map((p) => Number(p[1]));
@@ -2271,6 +2651,17 @@ function renderQueryManifold(audit, resultIds, target = "#query-manifold") {
   const sortedZ = [...flatZ].sort((a, b) => a - b);
   const zMin = _quantile(sortedZ, 0.02);
   const zMax = _quantile(sortedZ, 0.98);
+  const zRange = zMax - zMin;
+  if (zRange < 1e-9) {
+    // All degrees are effectively identical — surface would be flat and
+    // colormap-degenerate. Show a clear message instead of leaving the card
+    // blank, which is what users were seeing in the audit panel.
+    if (typeof target === "string" && target.includes("audit-query-manifold")) {
+      el.innerHTML =
+        '<div class="manifold-empty-msg">Graph Laplacian Manifold: degree variance ≈ 0, cannot render surface.</div>';
+    }
+    return;
+  }
 
   const surface = {
     x: gridX,

@@ -6,7 +6,11 @@
 
     <title>LEAF Prompt Kaban</title>
 
-    <link rel="stylesheet" href="./styles.css" />
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+
+    <link rel="stylesheet" href="./styles.css?v=frontend7-2" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -60,38 +64,14 @@
             </span>
           </div>
 
-          <div class="spectral-control">
-            <div class="spectral-label-row">
-              <label for="spectral-slider">
-                Tau spectral sharpness
-              </label>
-
-              <span id="spectral-value">0.75</span>
+          <div class="search-results-panel">
+            <div class="search-results-header">
+              <span>Search Mode</span>
+              <strong id="search-mode-label">Semantic search</strong>
             </div>
 
-            <div class="search-results-panel">
-              <div class="search-results-header">
-                <span>Search Mode</span>
-                <strong id="search-mode-label">Semantic search</strong>
-              </div>
-
-              <p id="search-hint">
-                Type a query to search prompts through /api/prompts/nl_search.
-              </p>
-            </div>
-
-            <input
-              id="spectral-slider"
-              type="range"
-              min="0"
-              max="5"
-              step="0.05"
-              value="0.75"
-            />
-
-            <p>
-              Higher τ increases spectral sharpness in ArrowSpace.
-              Recommended range: τ ≈ 0.7–1.0.
+            <p id="search-hint">
+              Type a query to search prompts through /api/prompts/nl_search.
             </p>
           </div>
 
@@ -114,7 +94,7 @@
             />
 
             <p>
-              ArrowSpace spectral-vs-cosine mix.
+              Semantic structure blend.
               <strong>0 = pure spectral</strong> (graph Laplacian);
               <strong>1 = pure cosine</strong> similarity.
             </p>
@@ -139,84 +119,61 @@
             />
 
             <p>
-              Weight of metadata salience (upvotes / likes / reputation / views)
-              in the final score. <strong>0 disables</strong> metadata salience,
+              Metadata reranking weight (upvotes / likes / reputation / views).
+              <strong>0 disables</strong> metadata salience,
               <strong>1 gives</strong> it full influence.
             </p>
           </div>
 
           <div class="spectral-control">
             <div class="spectral-label-row">
-              <label for="lam-slider">
-                Result Diversity (λ MMR)
+              <label for="topk-select">
+                Top-K results
               </label>
 
-              <span id="lam-value">0.70</span>
+              <span id="topk-value">19</span>
             </div>
 
-            <input
-              id="lam-slider"
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value="0.7"
-            />
+            <select id="topk-select" class="leaf-select">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="19" selected>19</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
 
             <p>
-              MMR re-ranking weight. Higher values favor relevance;
-              lower values increase diversity.
+              Number of prompt results returned by LEAF.
+              Default matches the build-time topk (19).
             </p>
-            <div class="spectral-control">
-              <div class="spectral-label-row">
-                <label for="topk-select">
-                  Top-K results
-                </label>
+          </div>
 
-                <span id="topk-value">19</span>
-              </div>
-
-              <select id="topk-select" class="leaf-select">
-                <option value="5">5</option>
-                <option value="10">10</option>
-                <option value="19" selected>19</option>
-                <option value="25">25</option>
-                <option value="50">50</option>
-              </select>
-
-              <p>
-                Number of prompt results returned by LEAF.
-                Default matches the build-time topk (19).
-              </p>
+          <div class="spectral-control">
+            <div class="spectral-label-row">
+              <label>Manifold Build Params</label>
             </div>
 
-            <div class="spectral-control">
-              <div class="spectral-label-row">
-                <label>Manifold Build Params</label>
-              </div>
-
-              <div id="build-params-display" class="build-params-display">
-                <code>eps=1.2311 · k=38 · topk=19 · p=2.0 · sigma=None</code>
-              </div>
-
-              <p>
-                ArrowSpace graph-Laplacian build parameters used to construct
-                the manifold index.
-              </p>
+            <div id="build-params-display" class="build-params-display">
+              <code>eps=1.2311 · k=38 · topk=19 · p=2.0 · sigma=None</code>
             </div>
-              <div class="spectral-control">
-                <div class="spectral-label-row">
-                  <label>
-                    Recent Searches
-                  </label>
-                </div>
 
-                <div id="recent-searches" class="recent-searches">
-                  <span class="signal-empty">
-                    No recent searches
-                  </span>
-                </div>
-              </div>
+            <p>
+              ArrowSpace graph-Laplacian build parameters used to construct
+              the manifold index.
+            </p>
+          </div>
+
+          <div class="spectral-control">
+            <div class="spectral-label-row">
+              <label>
+                Recent Searches
+              </label>
+            </div>
+
+            <div id="recent-searches" class="recent-searches">
+              <span class="signal-empty">
+                No recent searches
+              </span>
             </div>
           </div>
         </aside>
@@ -353,6 +310,6 @@
       </div>
     </div>
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=frontend7-2"></script>
   </body>
 </html>
