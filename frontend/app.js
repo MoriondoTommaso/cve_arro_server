@@ -23,6 +23,18 @@ const state = {
   ),  
 };
 
+// Guard for legacy dataset-explorer code paths that reference DOM ids
+// (`#metadata-out`, `#stats-out`, `#grid` table view, `#tensor-viewer`, etc.)
+// that no longer exist in the LEAF UI.  These functions are dead in the
+// current build but are kept in-source for now; they short-circuit if their
+// target nodes are missing so accidental calls cannot throw.
+function _legacyExplorerActive() {
+  return !!(document.getElementById("metadata-out")
+    || document.getElementById("stats-out")
+    || document.getElementById("tensor-viewer")
+    || document.getElementById("slice-input"));
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: {
@@ -117,6 +129,7 @@ function renderMetadata(metadata) {
 }
 
 async function loadMetadata(d) {
+  if (!_legacyExplorerActive()) return;
   try {
     const m = await api(`/api/datasets/${encodeURIComponent(d.id)}/metadata`);
 
@@ -380,6 +393,7 @@ function createEmptyManifoldMessage() {
 
 
 async function loadManifold(d) {
+  if (!_legacyExplorerActive()) return;
   try {
     const m = await api(`/api/datasets/${encodeURIComponent(d.id)}/manifold`);
     renderManifold(m);
@@ -498,6 +512,7 @@ function renderStats(stats) {
 
 
 async function loadStats(d) {
+  if (!_legacyExplorerActive()) return;
   let stats = {
     nitems: Array.isArray(d.shape) ? d.shape[0] : "—",
     nfeatures: Array.isArray(d.shape) ? d.shape[1] : "—",
@@ -570,6 +585,7 @@ function rowsCountFromPage(page) {
 }
 
 async function loadNextPage() {
+  if (!_legacyExplorerActive()) return;
   if (!state.selected || state.loading || state.exhausted || state.sliceMode) return;
   state.loading = true;
   $("#data-status").textContent = `loading rows ${state.nextOffset}…`;
@@ -599,6 +615,7 @@ async function loadNextPage() {
 }
 
 async function applySlice() {
+  if (!_legacyExplorerActive()) return;
   if (!state.selected) return;
 
   const spec = $("#slice-input").value.trim();
@@ -792,6 +809,7 @@ function isTensorDataset(dataset) {
 }
 
 async function loadTensorPreview(dataset) {
+  if (!_legacyExplorerActive()) return;
   if (!isTensorDataset(dataset)) return;
 
   $("#data-status").textContent = "loading tensor preview…";
@@ -808,6 +826,7 @@ async function loadTensorPreview(dataset) {
 }
 
 async function updateTensorSlice(sliceIndex) {
+  if (!_legacyExplorerActive()) return;
   if (!state.selected || !isTensorDataset(state.selected)) return;
 
   try {
@@ -1079,6 +1098,7 @@ function renderTensorPreview(tensor) {
 }
 
 function attachInfiniteScroll() {
+  if (!_legacyExplorerActive()) return;
   $("#grid").addEventListener("scroll", (e) => {
     const el = e.currentTarget;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 50) {
@@ -1452,8 +1472,8 @@ async function loadAuditPanel() {
     const [health, graph, lambdas, audit] = await Promise.all([
       api("/api/prompts/health"),
       api("/api/prompts/graph_laplacian"),
-      api("/api/prompts/lambdas"),
-      api("/api/prompts/audit"),
+      _getCachedLambdas(),
+      _getCachedAudit(),
     ]);
 
     $("#health").textContent = "LEAF Ready";
@@ -1771,37 +1791,16 @@ function renderAuditPCA(audit) {
 }
 
 function renderAuditManifold(audit) {
-  const el = $("#audit-query-manifold");
-  if (!el) return;
-
-  const originalEl = document.getElementById("query-manifold");
-
-  el.id = "query-manifold";
-  if (originalEl) originalEl.id = "query-manifold-search";
-
-  renderQueryManifold(audit, new Set());
-
-  el.id = "audit-query-manifold";
-  if (originalEl) originalEl.id = "query-manifold";
+  renderQueryManifold(audit, new Set(), "#audit-query-manifold");
 }
 
 function renderAuditSpectral(lambdas) {
-  const el = $("#audit-spectral-fingerprint");
-  if (!el) return;
-
-  const originalEl = document.getElementById("spectral-fingerprint");
-
-  el.id = "spectral-fingerprint";
-  if (originalEl) originalEl.id = "spectral-fingerprint-search";
-
-  renderQueryLambdaChart(lambdas);
-
-  el.id = "audit-spectral-fingerprint";
-  if (originalEl) originalEl.id = "spectral-fingerprint";
+  renderQueryLambdaChart(lambdas, "#audit-spectral-fingerprint");
 }
 
 
 function renderTensorViewer(tensor) {
+  if (!_legacyExplorerActive()) return;
   state.tensorData = tensor;
 
   const grid = $("#grid");
@@ -2034,6 +2033,11 @@ function wireControls() {
     });
   }
 
+  $("#refresh-audit-btn")?.addEventListener("click", () => {
+    invalidateVizCache();
+    loadAuditPanel();
+  });
+
   $("#prompt-modal-close")?.addEventListener("click", () => {
     $("#prompt-modal").classList.add("hidden");
   });
@@ -2107,6 +2111,23 @@ function renderRecentSearches() {
   });
 }
 
+// Client-side cache for /api/prompts/audit and /api/prompts/lambdas.
+// PCA on the 20k × 768 corpus is the slow part; the result does not change
+// across queries, so a single in-tab cache avoids re-fetching it on every search.
+const _vizCache = { audit: null, lambdas: null };
+async function _getCachedAudit() {
+  if (!_vizCache.audit) _vizCache.audit = await api("/api/prompts/audit");
+  return _vizCache.audit;
+}
+async function _getCachedLambdas() {
+  if (!_vizCache.lambdas) _vizCache.lambdas = await api("/api/prompts/lambdas");
+  return _vizCache.lambdas;
+}
+function invalidateVizCache() {
+  _vizCache.audit = null;
+  _vizCache.lambdas = null;
+}
+
 async function renderSearchVisualizations(results) {
   const resultIds = new Set(
     results.map((item) => item.id)
@@ -2114,8 +2135,8 @@ async function renderSearchVisualizations(results) {
 
   try {
     const [audit, lambdas] = await Promise.all([
-      api("/api/prompts/audit"),
-      api("/api/prompts/lambdas"),
+      _getCachedAudit(),
+      _getCachedLambdas(),
     ]);
 
     renderQueryManifold(audit, resultIds);
@@ -2126,8 +2147,8 @@ async function renderSearchVisualizations(results) {
   }
 }
 
-function renderQueryManifold(audit, resultIds) {
-  const el = $("#query-manifold");
+function renderQueryManifold(audit, resultIds, target = "#query-manifold") {
+  const el = typeof target === "string" ? $(target) : target;
   if (!el || !audit?.pca_2d || !window.Plotly) return;
 
   const points = audit.pca_2d;
@@ -2243,8 +2264,8 @@ function renderQueryManifold(audit, resultIds) {
   );
 }
 
-function renderQueryLambdaChart(data) {
-  const el = $("#query-lambda-chart");
+function renderQueryLambdaChart(data, target = "#query-lambda-chart") {
+  const el = typeof target === "string" ? $(target) : target;
   if (!el || !data?.lambdas || !window.Plotly) return;
 
   const lambdas = data.lambdas
