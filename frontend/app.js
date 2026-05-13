@@ -44,7 +44,7 @@ async function runPromptNLSearch(query) {
     method: "POST",
     body: JSON.stringify({
       query,
-      k: 10,
+      k: Number($("#topk-select")?.value || 50),
       tau: 0.8,
       lam: 0.7,
     }),
@@ -1462,8 +1462,10 @@ async function loadAuditPanel() {
     renderAuditHealth(health);
     renderAuditGraph(graph);
     renderAuditLambdas(lambdas);
-    renderAuditStats(audit)
+    renderAuditStats(audit, lambdas);
     renderAuditPCA(audit);
+    renderAuditManifold(audit);
+    renderAuditSpectral(lambdas);
 
   } catch (e) {
     console.error(e);
@@ -1599,14 +1601,14 @@ function renderAuditLambdas(data) {
   `;
 }
 
-function renderAuditStats(audit) {
+function renderAuditStats(audit, lambdas) {
   const container = $("#audit-stats");
 
   if (!container) return;
 
   const stats = audit.degree_stats || {};
 
-  const fiedler = audit.fiedler_value ?? 0;
+  const fiedler = (lambdas?.lambdas?.[1]) ?? audit.fiedler_value ?? 0;
 
   let fiedlerColor = "#f87171";
 
@@ -1766,6 +1768,36 @@ function renderAuditPCA(audit) {
 
     runSearch();
   };
+}
+
+function renderAuditManifold(audit) {
+  const el = $("#audit-query-manifold");
+  if (!el) return;
+
+  const originalEl = document.getElementById("query-manifold");
+
+  el.id = "query-manifold";
+  if (originalEl) originalEl.id = "query-manifold-search";
+
+  renderQueryManifold(audit, new Set());
+
+  el.id = "audit-query-manifold";
+  if (originalEl) originalEl.id = "query-manifold";
+}
+
+function renderAuditSpectral(lambdas) {
+  const el = $("#audit-spectral-fingerprint");
+  if (!el) return;
+
+  const originalEl = document.getElementById("spectral-fingerprint");
+
+  el.id = "spectral-fingerprint";
+  if (originalEl) originalEl.id = "spectral-fingerprint-search";
+
+  renderQueryLambdaChart(lambdas);
+
+  el.id = "audit-spectral-fingerprint";
+  if (originalEl) originalEl.id = "spectral-fingerprint";
 }
 
 
