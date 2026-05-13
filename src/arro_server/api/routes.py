@@ -650,12 +650,20 @@ def prompts_graph_laplacian() -> dict[str, Any]:
 @router.get("/prompts/audit")
 def prompts_audit() -> dict[str, Any]:
     engine = _get_engine()
-    
+
+    # Return cached payload if available — PCA on 20k × 768 is the expensive
+    # part of this handler, and the result does not change unless the engine
+    # is rebuilt. Cache lives on the engine singleton and is cleared on
+    # PromptSearchEngine.reset().
+    cached = getattr(engine, "_audit_cache", None)
+    if cached is not None:
+        return cached
+
     try:
         from sklearn.decomposition import PCA
     except ImportError as exc:
         raise HTTPException(
-            status_code=501, 
+            status_code=501,
             detail="scikit-learn is required for /prompts/audit."
         ) from exc
 
@@ -726,7 +734,7 @@ def prompts_audit() -> dict[str, Any]:
         coords = []
         explained_variance = []
 
-    return {
+    payload = {
         "graph_stats": {
             "n_nodes": n,
             "n_edges": n_edges,
@@ -755,6 +763,43 @@ def prompts_audit() -> dict[str, Any]:
         "pca_explained_variance": explained_variance,
         "ids": engine.ids if hasattr(engine, 'ids') else [],
     }
+    # Stash on the engine singleton so subsequent calls return instantly.
+    try:
+        engine._audit_cache = payload
+    except AttributeError:
+        pass
+    return payload
+
+
+@router.post("/prompts/search", response_model=PromptSearchResponse)
+def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
+    """Run the LEAF semantic search using a pre-computed 768-d nomic embedding.
+
+    Use this endpoint when the caller has already embedded the query (e.g. a
+    long-lived client batch process).  For natural-language queries, prefer
+    POST /api/prompts/nl_search, which embeds the text server-side.
+    """
+    engine    = _get_engine()
+    query_vec = np.asarray(body.vector, dtype=np.float64)
+    try:
+        raw = engine.search(
+            query_vec,
+            k=body.k,
+            tau=body.tau,
+            alpha=body.alpha,
+            lam=body.lam,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PromptSearchResponse(
+        query=None,
+        k=body.k,
+        tau=body.tau,
+        lam=body.lam,
+        results=[PromptSearchResult(**r) for r in raw],
+        result_count=len(raw),
+    )
+
 
 @router.post("/prompts/nl_search", response_model=PromptSearchResponse)
 def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:

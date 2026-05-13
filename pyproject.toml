@@ -49,6 +49,9 @@ nlp = [
     "torch>=2.2",
     "torchaudio",
     "torchvision",
+    # Required by nomic-embed-text-v1.5 (loaded via trust_remote_code=True).
+    # Without einops, EmbedderService.get() raises ImportError at startup.
+    "einops>=0.7",
 ]
 
 # Notebook / exploration tools – NOT needed by the running server.
