@@ -18,6 +18,9 @@ const state = {
   tensorData: null,
   tensorColorMode: "grayscale",
   tensorPlayTimer: null,
+  recentSearches: JSON.parse(
+    localStorage.getItem("leafRecentSearches") || "[]"
+  ),  
 };
 
 async function api(path, options = {}) {
@@ -34,6 +37,18 @@ async function api(path, options = {}) {
   }
 
   return res.json();
+}
+
+async function runPromptNLSearch(query) {
+  return api("/api/prompts/nl_search", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      k: 10,
+      tau: 0.8,
+      lam: 0.7,
+    }),
+  });
 }
 
 async function refreshHealth() {
@@ -238,20 +253,30 @@ async function loadMetadata(d) {
 }
 
 function renderManifold(manifold) {
+  const hasEmbedding =
+    Array.isArray(manifold.embedding) &&
+    Array.isArray(manifold.embedding[0]);
+
+  if (!hasEmbedding) {
+    $("#manifold-out").innerHTML = `
+      <div class="signal-card">
+        <span class="signal-label">Status</span>
+        <strong>No embedding projection available</strong>
+      </div>
+
+      <div class="signal-card">
+        <span class="signal-label">Source</span>
+        <strong>${manifold.source ?? manifold.backend ?? "local"}</strong>
+      </div>
+    `;
+    return;
+  }
+
   const method = manifold.method ?? manifold.kind ?? "Unknown";
   const embeddingDim = manifold.embedding_dim ?? manifold.intrinsic_dim ?? "—";
-  const embeddingPoints =
-    Array.isArray(manifold.embedding)
-      ? manifold.embedding.length
-      : "—";
-
-  const embeddingAxes =
-    Array.isArray(manifold.embedding?.[0])
-      ? manifold.embedding[0].length
-      : "—";
-
-  const source =
-    manifold.source ?? manifold.backend ?? "local";
+  const embeddingPoints = manifold.embedding.length;
+  const embeddingAxes = manifold.embedding[0].length;
+  const source = manifold.source ?? manifold.backend ?? "local";
 
   $("#manifold-out").innerHTML = `
     <div class="signal-card">
@@ -295,6 +320,7 @@ function renderManifold(manifold) {
       </div>
     </div>
   `;
+
   renderManifoldPlot(manifold);
 }
 
@@ -481,12 +507,10 @@ async function loadManifold(d) {
   } catch (e) {
     console.warn("Manifold unavailable:", e);
 
-    $("#manifold-out").innerHTML = `
-      <div class="signal-card">
-        <span class="signal-label">Status</span>
-        <strong>Unavailable</strong>
-      </div>
-    `;
+    renderManifold({
+      source: "local",
+      embedding: null,
+    });
   }
 }
 
@@ -520,146 +544,139 @@ function renderLambdaBars(lambdas) {
 }
 
 function renderArrowSpaceSignals(stats) {
-  const gl =
-    stats.gl ??
-    stats.GL ??
-    stats.global_laplacian ??
-    stats.graph_laplacian ??
-    null;
+  console.log("ArrowSpace stats received:", stats);
 
-  const lambdas =
-    stats.lambdas_distribution ??
-    stats.lambda_distribution ??
-    stats.lambdas ??
-    stats.eigenvalues ??
-    null;
+  const glNodes = stats.gl_nodes ?? "—";
 
-  if (gl == null && lambdas == null) {
-    $("#signal-gl").innerHTML = `
-      <div class="signal-empty">
-        No graph signal available for this dataset
-      </div>
-    `;
+  const glShape = Array.isArray(stats.gl_shape)
+    ? stats.gl_shape.join(" × ")
+    : "—";
 
+  const lambdas = Array.isArray(stats.lambdas_sorted)
+    ? stats.lambdas_sorted
+    : [];
+
+  $("#signal-gl").innerHTML = `
+    <div class="signal-row">
+      <span>Nodes</span>
+      <strong>${glNodes}</strong>
+    </div>
+
+    <div class="signal-row">
+      <span>Graph Shape</span>
+      <strong>${glShape}</strong>
+    </div>
+  `;
+
+  if (lambdas.length > 0) {
+    const lambdaValues = lambdas.map((item) =>
+      Array.isArray(item) ? Number(item[0]) : Number(item)
+    );
+
+    $("#signal-lambda").innerHTML = renderLambdaBars(lambdaValues);
+  } else {
     $("#signal-lambda").innerHTML = `
       <div class="signal-empty">
         No eigenvalue distribution available
       </div>
     `;
-
-    return;
-  }
-
-  if (gl == null) {
-    $("#signal-gl").innerHTML = `
-      <div class="signal-empty">No graph signal available</div>
-    `;
-  } else {
-    $("#signal-gl").innerHTML = `
-      <div class="signal-metric">
-        <span>Nodes</span>
-        <strong>${gl.nodes}</strong>
-      </div>
-
-      <div class="signal-metric">
-        <span>Graph Shape</span>
-        <strong>${gl.shape.join(" × ")}</strong>
-      </div>
-    `;
-  }
-
-  if (lambdas == null) {
-    $("#signal-lambda").innerHTML = `
-      <div class="signal-empty">No eigenvalue distribution available</div>
-    `;
-  } else {
-    $("#signal-lambda").innerHTML = renderLambdaBars(lambdas);
   }
 }
 
 
 function renderStats(stats) {
-  const hasGraphStats =
-    stats.gl ||
-    stats.lambdas_distribution ||
-    stats.spectral_topology_score;
-
-  if (!hasGraphStats) {
-    $("#stats-out").innerHTML = `
-      <div class="signal-card">
-        <span class="signal-label">Mean</span>
-        <strong>${formatCell(stats.mean ?? "—")}</strong>
-      </div>
-
-      <div class="signal-card">
-        <span class="signal-label">Std</span>
-        <strong>${formatCell(stats.std ?? "—")}</strong>
-      </div>
-
-      <div class="signal-card">
-        <span class="signal-label">Min</span>
-        <strong>${formatCell(stats.min ?? "—")}</strong>
-      </div>
-
-      <div class="signal-card">
-        <span class="signal-label">Max</span>
-        <strong>${formatCell(stats.max ?? "—")}</strong>
-      </div>
-    `;
-    return;
-  }
-
-  const glNodes = stats.gl?.nodes ?? "—";
-
-  const glShape =
-    stats.gl?.shape
-      ? `${stats.gl.shape[0]} × ${stats.gl.shape[1]}`
-      : "—";
-
-  const lambdaCount = stats.lambdas_distribution?.length ?? 0;
-  const topologyScore = stats.spectral_topology_score ?? "—";
-
   $("#stats-out").innerHTML = `
     <div class="signal-card">
+      <span class="signal-label">Items</span>
+      <strong>${stats.nitems ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Features</span>
+      <strong>${stats.nfeatures ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Clusters</span>
+      <strong>${stats.nclusters ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
       <span class="signal-label">GL Nodes</span>
-      <strong>${glNodes}</strong>
+      <strong>${stats.gl_nodes ?? "—"}</strong>
     </div>
 
     <div class="signal-card">
-      <span class="signal-label">Graph Shape</span>
-      <strong>${glShape}</strong>
-    </div>
-
-    <div class="signal-card">
-      <span class="signal-label">Eigenvalues</span>
-      <strong>${lambdaCount}</strong>
-    </div>
-
-    <div class="signal-card">
-      <span class="signal-label">Topology Score</span>
-      <strong>${topologyScore}</strong>
+      <span class="signal-label">GL Shape</span>
+      <strong>${
+        Array.isArray(stats.gl_shape)
+          ? stats.gl_shape.join(" × ")
+          : "—"
+      }</strong>
     </div>
   `;
 }
 
 
 async function loadStats(d) {
+  let stats = {
+    nitems: Array.isArray(d.shape) ? d.shape[0] : "—",
+    nfeatures: Array.isArray(d.shape) ? d.shape[1] : "—",
+    nclusters: "—",
+    gl_nodes: Array.isArray(d.shape) ? d.shape[0] : "—",
+    gl_shape: Array.isArray(d.shape) ? [d.shape[0], d.shape[0]] : null,
+    lambdas_sorted: [],
+  };
+
   try {
-    const s = await api(`/api/datasets/${encodeURI(d.id)}/stats`);
+    const backendStats = await api(
+      `/api/datasets/${encodeURIComponent(d.id)}/stats`
+    );
 
-    renderStats(s);
-    renderArrowSpaceSignals(s);
-
+    stats = {
+      ...stats,
+      ...backendStats,
+    };
   } catch (e) {
-    $("#stats-out").innerHTML = `
-      <div class="signal-card">
-        <span class="signal-label">Status</span>
-        <strong>Unavailable</strong>
-      </div>
-    `;
+    console.warn("Stats endpoint unavailable, trying index fallback:", e);
 
-    renderArrowSpaceSignals({});
+    try {
+      const indexStats = await api(
+        `/api/datasets/${encodeURIComponent(d.id)}/index`,
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        }
+      );
+
+      stats = {
+        ...stats,
+        ...indexStats,
+        gl_nodes: indexStats.nitems ?? stats.gl_nodes,
+        gl_shape: indexStats.nitems
+          ? [indexStats.nitems, indexStats.nitems]
+          : stats.gl_shape,
+      };
+    } catch (indexError) {
+      console.warn("Index fallback unavailable:", indexError);
+    }
   }
+
+  try {
+    const lambdas = await api(
+      `/api/datasets/${encodeURIComponent(d.id)}/lambdas`
+    );
+
+    stats = {
+      ...stats,
+      ...lambdas,
+    };
+  } catch (e) {
+    console.warn("Lambdas unavailable:", e);
+  }
+
+  renderStats(stats);
+  renderArrowSpaceSignals(stats);
 }
 
 function rowsCountFromPage(page) {
@@ -832,7 +849,8 @@ function appendRows(payload) {
 
   const firstRow = Array.isArray(rows[0]) ? rows[0] : [rows[0]];
 
-  for (let c = 0; c < firstRow.length; c++) {
+  const maxPreviewCols = 20;
+  for (let c = 0; c < Math.min(firstRow.length, maxPreviewCols); c++) {
     const th = document.createElement("th");
     th.textContent = c;
     tr.appendChild(th);
@@ -853,7 +871,7 @@ function appendRows(payload) {
 
     const cells = Array.isArray(row) ? row : [row];
 
-    cells.forEach((v) => {
+    cells.slice(0, maxPreviewCols).forEach((v) => {
       const td = document.createElement("td");
 
       if (Array.isArray(v)) {
@@ -1220,122 +1238,638 @@ async function buildDatasetIndex(datasetId) {
   });
 }
 
-async function runSearch() {
-  const query = $("#filter").value.trim().toLowerCase();
 
-  state.searchQuery = query;
+async function runSearch() {
+  const query = $("#filter").value.trim();
+
+  if (
+    query &&
+    !state.recentSearches.includes(query)
+  ) {
+    state.recentSearches.unshift(query);
+
+    state.recentSearches =
+      state.recentSearches.slice(0, 8);
+
+    renderRecentSearches();
+    localStorage.setItem(
+      "leafRecentSearches",
+      JSON.stringify(state.recentSearches)
+    );
+  }
 
   if (!query) {
-    state.rankedDatasetIds = null;
-
-    $("#search-mode-label").textContent = "Local filter";
-    $("#search-hint").textContent =
-      "Type a query to filter datasets. Spectral weighting is ready for ArrowSpace search.";
-
-    renderDatasetList();
+    $("#grid").innerHTML = `
+      <div class="welcome-screen">
+        <h2>LEAF Semantic Search</h2>
+        <p>
+          Try queries like “fitness app translation”
+          or “software localization”.
+        </p>
+      </div>
+    `;
     return;
   }
 
-  const scored = state.datasets
-    .map((d) => {
-      const id = d.id.toLowerCase();
-      const dtype = String(d.dtype || "").toLowerCase();
-      const kind = String(d.kind || "").toLowerCase();
-      const shape = Array.isArray(d.shape)
-        ? d.shape.join("x")
-        : "";
+  try {
+    $("#health").textContent = "Searching...";
 
-      let score = 0;
+    const tau = Number($("#spectral-slider").value);
+    const alpha = Number($("#alpha-slider").value);
+    const lam = Number($("#lam-slider").value);
+    
+    $("#grid").innerHTML = `
+      <div class="loading-screen">
+        <div class="loader"></div>
+        <p>Searching LEAF prompt space...</p>
+      </div>
+    `;
+    const result = await api("/api/prompts/nl_search", {
+      method: "POST",
 
-      if (id.includes(query)) score += 5;
-      if (kind.includes(query)) score += 2;
-      if (dtype.includes(query)) score += 2;
-      if (shape.includes(query)) score += 1;
-
-      if (d.shape?.length === 2) {
-        score += 3 * state.spectralWeight;
-      }
-
-      if (d.shape?.length === 3) {
-        score += 0.5;
-      }
-
-      return {
-        id: d.id,
-        score,
-      };
-    })
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score);
-
-    try {
-      const backendScores = [];
-
-      for (const d of state.datasets) {
-        if (d.shape?.length !== 2) {
-          continue;
-        }
-        let result;
-
-        try {
-          result = await runHybridDatasetSearch(d.id, query);
-        } catch (e) {
-          if (String(e.message).includes("No index built")) {
-            await buildDatasetIndex(d.id);
-            result = await runHybridDatasetSearch(d.id, query);
-          } else {
-            throw e;
-          }
-       }
-        
-        console.log(
-          "Hybrid search result for",
-          d.id,
-          result
-        );
-
-    backendScores.push({
-      id: d.id,
-      score:
-        result.score ??
-        result.best_score ??
-        result.results?.[0]?.score ??
-        0,
+      body: JSON.stringify({
+        query,
+        k: Number($("#topk-select")?.value || 10),
+        tau,
+        alpha,
+        lam,
+      }),
     });
-  }
 
-  const validBackendScores = backendScores
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score);
+    renderPromptResults(result.results || []);
 
-  if (validBackendScores.length > 0) {
-    state.rankedDatasetIds = validBackendScores.map((item) => item.id);
+    $("#health").textContent = "LEAF Ready";
+    $("#health").className = "health ok";
 
     $("#search-mode-label").textContent =
-      `Hybrid ${state.spectralWeight.toFixed(2)}`;
+      `τ ${tau.toFixed(2)} · α ${alpha.toFixed(2)} · λ ${lam.toFixed(2)}`;
 
     $("#search-hint").textContent =
-      `${validBackendScores.length} hybrid 2-D result${
-        validBackendScores.length === 1 ? "" : "s"
-      } for "${query}". Tensor datasets are shown through local fallback ranking.`;
+      `${result.result_count || 0} semantic results`;
 
-    renderDatasetList();
+  } catch (e) {
+    console.error(e);
+
+    $("#health").textContent = "Search Error";
+    $("#health").classList.add("err");
+
+    $("#grid").innerHTML = `
+      <div class="error-screen">
+        <h2>Search failed</h2>
+        <p>${e.message}</p>
+      </div>
+    `;
+    wirePromptCards();
+  }
+}
+
+function renderPromptResults(results) {
+  state.lastResults = results;
+  if (!results.length) {
+    $("#grid").innerHTML = `
+      <div class="welcome-screen">
+        <h2>No results</h2>
+        <p>No prompts matched your query.</p>
+      </div>
+    `;
     return;
   }
-} catch (e) {
-  console.warn("Hybrid search unavailable, using local ranking:", e);
+
+  $("#grid").innerHTML = `
+    <div class="prompt-results">
+      ${results
+        .map((item, index) =>
+        renderPromptCard(item, index)
+      )
+      .join("")}
+    </div>
+  `;
+  wirePromptCards();
 }
 
-  state.rankedDatasetIds = scored.map((item) => item.id);
+function highlightQuery(text, query) {
+  if (!query) return escapeHtml(text);
 
-  $("#search-mode-label").textContent =
-    `Local ${state.spectralWeight.toFixed(2)}`;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-  $("#search-hint").textContent =
-    `${scored.length} local ranked result${scored.length === 1 ? "" : "s"} for "${query}". Hybrid search is available only for 2-D datasets.`;
+  const regex = new RegExp(`(${escaped})`, "gi");
 
-  renderDatasetList();
+  return escapeHtml(text).replace(
+    regex,
+    '<mark class="prompt-highlight">$1</mark>'
+  );
 }
+
+
+function renderPromptCard(item, index) {
+  const content =
+    item.content ||
+    item.body ||
+    "No content";
+
+  return `
+    <div class="prompt-result-card" data-index="${index}">
+      <div class="prompt-result-header">
+        <strong>
+          ${item.title || item.id || "Untitled Prompt"}
+        </strong>
+
+        <div class="prompt-score-wrap">
+          <span class="prompt-score-value">
+            ${(item.score ?? 0).toFixed(4)}
+          </span>
+
+          <div class="prompt-score-bar">
+            <div
+              class="prompt-score-fill"
+              style="width:${Math.min(
+                100,
+                (item.score ?? 0) * 100
+              )}%"
+            ></div>
+          </div>
+        </div>
+      </div>
+
+      <p class="prompt-content">
+        ${highlightQuery(content, state.searchQuery)}
+      </p>
+
+      <div class="prompt-card-actions">
+        <button class="prompt-toggle" type="button">
+        Expand
+      </button>
+
+      <button
+        class="prompt-copy-btn"
+        type="button"
+        data-copy="${escapeHtml(content)}"
+      >
+        Copy
+      </button>
+    </div>
+
+      <div class="prompt-result-meta">
+        <span>ID: ${item.id ?? "—"}</span>
+
+        <span>
+          Salience:
+          ${(item.salience ?? 0).toFixed(3)}
+        </span>
+
+        <span>
+          Upvotes:
+          ${item.upvotes ?? 0}
+        </span>
+
+        <span>
+          Views:
+          ${item.views ?? 0}
+        </span>
+      </div>
+    </div>
+  `;
+}
+
+function wirePromptCards() {
+  document.querySelectorAll(".prompt-result-card").forEach((card) => {
+    card.classList.add("collapsed");
+
+    const btn = card.querySelector(".prompt-toggle");
+
+    card.addEventListener("click", (e) => {
+      if (e.target.classList.contains("prompt-toggle")) {
+        return;
+      }
+
+      const idx = Number(card.dataset.index);
+
+      card.addEventListener("dblclick", () => {
+        openPromptModal(state.lastResults[idx]);
+      });
+    });
+
+    if (!btn) return;
+
+    btn.addEventListener("click", () => {
+      card.classList.toggle("collapsed");
+
+      btn.textContent = card.classList.contains("collapsed")
+        ? "Expand"
+        : "Collapse";
+    });
+  });
+}
+
+function openPromptModal(item) {
+  const modal = $("#prompt-modal");
+  const body = $("#prompt-modal-body");
+
+  const content =
+    item.content ||
+    item.body ||
+    "No content";
+
+  body.innerHTML = `
+    <h2 class="prompt-modal-title">
+      ${escapeHtml(item.title || item.id || "Prompt")}
+    </h2>
+
+    <div class="prompt-modal-text">
+      ${highlightQuery(content, state.searchQuery)}
+    </div>
+
+    <div class="prompt-modal-meta">
+      <div class="prompt-modal-chip">
+        Score ${(item.score ?? 0).toFixed(4)}
+      </div>
+
+      <div class="prompt-modal-chip">
+        Salience ${(item.salience ?? 0).toFixed(3)}
+      </div>
+
+      <div class="prompt-modal-chip">
+        Upvotes ${item.upvotes ?? 0}
+      </div>
+
+      <div class="prompt-modal-chip">
+        Views ${item.views ?? 0}
+      </div>
+
+      <div class="prompt-modal-chip">
+        ${item.id ?? "—"}
+      </div>
+    </div>
+  `;
+
+  modal.classList.remove("hidden");
+}
+
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+
+async function ensureLeafReady() {
+  try {
+    const health = await api("/api/prompts/health");
+
+    if (health.status === "ready") {
+      return health;
+    }
+
+    $("#health").textContent = "Warming LEAF...";
+    
+    await api("/api/prompts/warm");
+
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+
+      const polled = await api("/api/prompts/health");
+
+      if (polled.status === "ready") {
+        return polled;
+      }
+    }
+
+    throw new Error("LEAF warmup timeout");
+  } catch (e) {
+    console.error("LEAF readiness error:", e);
+    throw e;
+  }
+}
+
+async function loadAuditPanel() {
+  try {
+    $("#health").textContent = "Loading audit...";
+
+    await ensureLeafReady();
+
+    const [health, graph, lambdas, audit] = await Promise.all([
+      api("/api/prompts/health"),
+      api("/api/prompts/graph_laplacian"),
+      api("/api/prompts/lambdas"),
+      api("/api/prompts/audit"),
+    ]);
+
+    $("#health").textContent = "LEAF Ready";
+    $("#health").classList.add("ok");
+
+    renderAuditHealth(health);
+    renderAuditGraph(graph);
+    renderAuditLambdas(lambdas);
+    renderAuditStats(audit)
+    renderAuditPCA(audit);
+
+  } catch (e) {
+    console.error(e);
+
+    $("#health").textContent = "Audit Error";
+    $("#health").classList.add("err");
+
+    $("#audit-content").innerHTML = `
+      <div class="error-screen">
+        <h2>LEAF Audit Error</h2>
+        <p>${e.message}</p>
+      </div>
+    `;
+  }
+}
+
+function renderAuditHealth(health) {
+  const container = $("#audit-health");
+
+  if (!container) return;
+
+  container.innerHTML = `
+    <div class="signal-card">
+      <span class="signal-label">Status</span>
+      <strong>${health.status ?? "unknown"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Prompt Engine</span>
+      <strong>${health.prompt_engine_ready}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Embedder</span>
+      <strong>${health.embedder_ready}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Model</span>
+      <strong>${health.embedder_model ?? "—"}</strong>
+    </div>
+  `;
+}
+
+function renderAuditGraph(graph) {
+  const container = $("#audit-graph");
+
+  if (!container) return;
+
+  container.innerHTML = `
+    <div class="signal-card">
+      <span class="signal-label">Items</span>
+      <strong>${graph.nitems ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Features</span>
+      <strong>${graph.nfeatures ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Clusters</span>
+      <strong>${graph.nclusters ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">GL Nodes</span>
+      <strong>${graph.gl_nodes ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">GL Shape</span>
+      <strong>
+        ${Array.isArray(graph.gl_shape)
+          ? graph.gl_shape.join(" × ")
+          : "—"}
+      </strong>
+    </div>
+  `;
+}
+
+function renderAuditLambdas(data) {
+  const container = $("#audit-lambdas");
+
+  if (!container) return;
+
+  const lambdas = data.lambdas || [];
+
+  if (!lambdas.length) {
+    container.innerHTML = `
+      <div class="signal-empty">
+        No eigenvalues available.
+      </div>
+    `;
+    return;
+  }
+
+  const maxVal = Math.max(...lambdas, 1);
+
+  const bars = lambdas
+    .slice(0, 32)
+    .map((v) => {
+      const h = Math.max(4, (v / maxVal) * 100);
+
+      return `
+        <div class="lambda-bar-wrap">
+          <div
+            class="lambda-bar"
+            style="height:${h}%"
+            title="${v.toFixed(5)}"
+          ></div>
+        </div>
+      `;
+    })
+    .join("");
+
+  container.innerHTML = `
+    <div class="signal-card">
+      <span class="signal-label">Fiedler Value</span>
+      <strong>
+        ${(lambdas[1] ?? 0).toFixed(6)}
+      </strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Eigenvalue Count</span>
+      <strong>${data.n ?? lambdas.length}</strong>
+    </div>
+
+    <div class="lambda-bars">
+      ${bars}
+    </div>
+  `;
+}
+
+function renderAuditStats(audit) {
+  const container = $("#audit-stats");
+
+  if (!container) return;
+
+  const stats = audit.degree_stats || {};
+
+  const fiedler = audit.fiedler_value ?? 0;
+
+  let fiedlerColor = "#f87171";
+
+  if (fiedler > 0.01) {
+    fiedlerColor = "#34d399";
+  } else if (fiedler > 0.001) {
+    fiedlerColor = "#facc15";
+  }
+
+  container.innerHTML = `
+    <div class="signal-card">
+      <span class="signal-label">Degree Mean</span>
+      <strong>${(stats.mean ?? 0).toFixed(4)}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Degree Std</span>
+      <strong>${(stats.std ?? 0).toFixed(4)}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Degree Min</span>
+      <strong>${(stats.min ?? 0).toFixed(4)}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Degree Max</span>
+      <strong>${(stats.max ?? 0).toFixed(4)}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Fiedler Value</span>
+      <strong style="color:${fiedlerColor}">
+        ${fiedler.toFixed(6)}
+      </strong>
+    </div>
+  `;
+}
+
+function renderAuditPCA(audit) {
+  const canvas = $("#audit-pca");
+
+  if (!canvas) return;
+
+  const points = audit.pca_2d || [];
+  const ids = audit.ids || [];
+
+  const ctx = canvas.getContext("2d");
+
+  const width = 900;
+  const height = 260;
+
+  canvas.width = width;
+  canvas.height = height;
+
+  ctx.clearRect(0, 0, width, height);
+
+  if (!points.length) {
+    ctx.fillStyle = "#9aa6bd";
+    ctx.font = "14px Inter";
+    ctx.fillText("No PCA data available", 24, 40);
+    return;
+  }
+
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  const pad = 24;
+
+  const projected = points.map((p, i) => {
+    const x =
+      pad +
+      ((p[0] - minX) / (maxX - minX || 1)) *
+        (width - pad * 2);
+
+    const y =
+      height -
+      pad -
+      ((p[1] - minY) / (maxY - minY || 1)) *
+        (height - pad * 2);
+
+    return {
+      x,
+      y,
+      id: ids[i] || `point_${i}`,
+    };
+  });
+
+  projected.forEach((p) => {
+    ctx.beginPath();
+
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+
+    ctx.fillStyle = "rgba(124,92,255,0.85)";
+    ctx.fill();
+  });
+
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    let hovered = null;
+
+    for (const p of projected) {
+      const dx = p.x - mx;
+      const dy = p.y - my;
+
+      if (Math.sqrt(dx * dx + dy * dy) < 8) {
+        hovered = p;
+        break;
+      }
+    }
+
+    const tooltip = $("#audit-pca-tooltip");
+
+    if (hovered) {
+      tooltip.textContent = hovered.id;
+    } else {
+      tooltip.textContent = "Hover points";
+    }
+  };
+  canvas.onclick = (e) => {
+    const rect = canvas.getBoundingClientRect();
+
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    let clicked = null;
+
+    for (const p of projected) {
+      const dx = p.x - mx;
+      const dy = p.y - my;
+
+      if (Math.sqrt(dx * dx + dy * dy) < 10) {
+        clicked = p;
+        break;
+      }
+    }
+
+    if (!clicked) return;
+
+    switchView("search");
+
+    const filter = $("#filter");
+    filter.value = clicked.id;
+
+    $("#search-hint").textContent =
+    `Searching selected PCA prompt ${clicked.id}...`;
+
+    runSearch();
+  };
+}
+
 
 function renderTensorViewer(tensor) {
   state.tensorData = tensor;
@@ -1479,7 +2013,66 @@ playBtn.addEventListener("click", () => {
   updateTensorSlice(0);
 }
 
+function switchView(viewName) {
+  const searchView = $("#search-view");
+  const auditView = $("#audit-view");
+  const searchTab = $("#tab-search");
+  const auditTab = $("#tab-audit");
+
+  if (viewName === "audit") {
+    searchView.classList.add("hidden");
+    auditView.classList.remove("hidden");
+
+    searchTab.classList.remove("active");
+    auditTab.classList.add("active");
+
+    loadAuditPanel();
+    return;
+  }
+
+  auditView.classList.add("hidden");
+  searchView.classList.remove("hidden");
+
+  auditTab.classList.remove("active");
+  searchTab.classList.add("active");
+}
+
+
 function wireControls() {
+  const alphaSlider = $("#alpha-slider");
+    if (alphaSlider) {
+      alphaSlider.addEventListener("input", (e) => {
+        $("#alpha-value").textContent = Number(e.target.value).toFixed(2);
+
+        clearTimeout(state.searchTimer);
+        state.searchTimer = setTimeout(() => {
+          runSearch();
+        }, 300);
+      });
+    }
+
+    const lamSlider = $("#lam-slider");
+    if (lamSlider) {
+      lamSlider.addEventListener("input", (e) => {
+        $("#lam-value").textContent = Number(e.target.value).toFixed(2);
+
+        clearTimeout(state.searchTimer);
+        state.searchTimer = setTimeout(() => {
+          runSearch();
+        }, 300);
+      });
+    }
+  const searchTab = $("#tab-search");
+    if (searchTab) {
+      searchTab.addEventListener("click", () => switchView("search"));
+}
+
+  const auditTab = $("#tab-audit");
+    if (auditTab) {
+      auditTab.addEventListener("click", () => switchView("audit"));
+    }
+}
+
   const filter = $("#filter");
   if (filter) {
     filter.addEventListener("input", () => {
@@ -1487,7 +2080,7 @@ function wireControls() {
 
       state.searchTimer = setTimeout(() => {
         runSearch();
-      }, 180);
+      }, 350);
     });
   }
 
@@ -1551,15 +2144,77 @@ function wireControls() {
       runSearch();
     });
   }
+
+  const topkSelect = $("#topk-select");
+  if (topkSelect) {
+    topkSelect.addEventListener("change", (e) => {
+      $("#topk-value").textContent = e.target.value;
+
+      clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(() => {
+        runSearch();
+      }, 300);
+    });
+    $("#prompt-modal-close")?.addEventListener("click", () => {
+      $("#prompt-modal").classList.add("hidden");
+    });
+
+    $(".prompt-modal-backdrop")?.addEventListener("click", () => {
+      $("#prompt-modal").classList.add("hidden");
+    });
+    
+  renderRecentSearches();
 }
+
 
 (async function main() {
   wireControls();
-  attachInfiniteScroll();
-  await refreshHealth();
+
   try {
-    await refreshDatasets();
+    const health = await api("/api/prompts/health");
+
+    $("#health").textContent =
+      health.status === "ready" ? "LEAF Ready" : "LEAF Warming...";
+
+    $("#health").className =
+      health.status === "ready" ? "health ok" : "health";
   } catch (e) {
-    $("#dataset-list").innerHTML = `<li>error: ${e.message}</li>`;
+    console.error("Health check failed:", e);
+
+    $("#health").textContent = "Backend offline";
+    $("#health").className = "health err";
   }
 })();
+
+function renderRecentSearches() {
+  const el = $("#recent-searches");
+
+  if (!state.recentSearches.length) {
+    el.innerHTML = `
+      <span class="signal-empty">
+        No recent searches
+      </span>
+    `;
+    return;
+  }
+
+  el.innerHTML = state.recentSearches
+    .map(
+      (query) => `
+        <button
+          class="recent-search-chip"
+          data-query="${escapeHtml(query)}"
+        >
+          ${escapeHtml(query)}
+        </button>
+      `
+    )
+    .join("");
+
+  el.querySelectorAll(".recent-search-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $("#filter").value = btn.dataset.query;
+      runSearch();
+    });
+  });
+}
