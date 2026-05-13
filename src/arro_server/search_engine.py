@@ -30,7 +30,7 @@ _BUILD_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
 
 # Hardcoded fallback params used when tuner results are absent (fresh clone / container).
 # Values come from the tuner run documented in the notebook (search_engine_demo.ipynb).
-_DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0}
+_DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 50, "p": 2.0}
 
 
 def _norm(arr: np.ndarray) -> np.ndarray:
