@@ -63,128 +63,7 @@ async function refreshHealth() {
   }
 }
 
-async function refreshDatasets() {
-  const data = await api("/api/datasets");
-  state.datasets = data.datasets;
-  $("#dataset-count").textContent = state.datasets.length;
-  renderDatasetList();
-}
 
-function renderDatasetList() {
-  const ul = $("#dataset-list");
-  ul.innerHTML = "";
-  const f = $("#filter").value.toLowerCase();
-  let visibleCount = 0;
-  const datasetsToRender = state.rankedDatasetIds
-    ? [...state.datasets].sort((a, b) => {
-        const aRank = state.rankedDatasetIds.indexOf(a.id);
-        const bRank = state.rankedDatasetIds.indexOf(b.id);
-
-        return (
-          (aRank === -1 ? Number.MAX_SAFE_INTEGER : aRank) -
-          (bRank === -1 ? Number.MAX_SAFE_INTEGER : bRank)
-        );
-      })
-    : state.datasets;
-
-  for (const d of datasetsToRender) {
-    if (f && !d.id.toLowerCase().includes(f)) continue;
-    visibleCount++;
-    const li = document.createElement("li");
-    li.dataset.id = d.id;
-    if (state.selected && state.selected.id === d.id) li.classList.add("active");
-    const idLine = document.createElement("div");
-    idLine.textContent = d.id;
-    idLine.className = "ds-title";
-    const meta = document.createElement("div");
-    meta.className = "ds-shape";
-    meta.textContent = `[${d.shape.join(",")}] · ${d.dtype || "—"}`;
-
-    const badge = document.createElement("span");
-    badge.className = `ds-badge ${d.kind}`;
-    badge.textContent = d.kind;
-
-    const scoreBadge = document.createElement("span");
-    scoreBadge.className = "ds-score";
-
-    if (state.rankedDatasetIds) {
-      const rank = state.rankedDatasetIds.indexOf(d.id);
-
-      scoreBadge.textContent =
-        rank >= 0 ? `rank #${rank + 1}` : "";
-    }
-
-    li.appendChild(idLine);
-    li.appendChild(meta);
-    li.appendChild(badge);
-    if (scoreBadge.textContent) {
-      li.appendChild(scoreBadge);
-    }
-    li.addEventListener("click", () => selectDataset(d));
-    ul.appendChild(li);
-  }
-  if (visibleCount === 0) {
-    ul.innerHTML = `
-      <li class="empty-list">
-        No datasets found
-      </li>
-  `;
-}
-
-$("#filter-status").textContent =
-  f
-    ? `${visibleCount} result${visibleCount === 1 ? "" : "s"} for "${f}"`
-    : "All datasets";
-}
-
-function resetMetrics() {
-  $("#metric-kind").textContent = "—";
-  $("#metric-shape").textContent = "—";
-  $("#metric-dtype").textContent = "—";
-}
-
-async function selectDataset(d) {
-  state.selected = d;
-  state.nextOffset = 0;
-  state.exhausted = false;
-  state.sliceMode = false;
-  if (state.tensorPlayTimer) {
-    clearInterval(state.tensorPlayTimer);
-    state.tensorPlayTimer = null;
-  }
-  $("#dataset-title").textContent = d.id;
-  $("#copy-id-btn").disabled = false;
-  $("#copy-id-btn").disabled = false;
-  $("#metric-kind").textContent = d.kind;
-  $("#metric-shape").textContent =
-    `[${d.shape.join(", ")}]`;
-  $("#metric-dtype").textContent =
-    d.dtype || "—";
-  $("#slice-input").value = "";
-  $("#grid").innerHTML = `
-  <div class="loading-screen">
-    <div class="loader"></div>
-    <p>Loading dataset...</p>
-  </div>
-`;
-  $("#data-status").textContent = "loading…";
-  renderDatasetList();
-  try {
-    await Promise.all([loadMetadata(d), loadManifold(d), loadStats(d)]);
-  } catch (e) {
-    console.warn(e);
-  }
-
-  if (isTensorDataset(d)) {
-    await loadTensorPreview(d);
-    return;
-  }
-
-  if (d.kind === "array") {
-    await loadNextPage();
-  } else {
-    $("#data-status").textContent = `(${d.kind} — no data view)`;
-  }}
 
 function renderMetadata(metadata) {
   const id = metadata.id ?? "—";
@@ -239,7 +118,7 @@ function renderMetadata(metadata) {
 
 async function loadMetadata(d) {
   try {
-    const m = await api(`/api/datasets/${encodeURI(d.id)}/metadata`);
+    const m = await api(`/api/datasets/${encodeURIComponent(d.id)}/metadata`);
 
     renderMetadata(m);
   } catch (e) {
@@ -695,7 +574,7 @@ async function loadNextPage() {
   state.loading = true;
   $("#data-status").textContent = `loading rows ${state.nextOffset}…`;
   try {
-    const url = `/api/datasets/${encodeURI(state.selected.id)}/data?offset=${state.nextOffset}&limit=${state.windowSize}`;
+    const url = `/api/datasets/${encodeURIComponent(state.selected.id)}/data?offset=${state.nextOffset}&limit=${state.windowSize}`;
     const page = await api(url);
     appendRows(page);
     if (page.next_offset == null) {
@@ -935,7 +814,7 @@ async function updateTensorSlice(sliceIndex) {
     const spec = encodeURIComponent(`${sliceIndex},:,:`);
 
     const url =
-      `/api/datasets/${encodeURI(state.selected.id)}/slice?spec=${spec}`;
+      `/api/datasets/${encodeURIComponent(state.selected.id)}/slice?spec=${spec}`;
 
     const response = await api(url);
 
@@ -1208,28 +1087,7 @@ function attachInfiniteScroll() {
   });
 }
 
-function buildSearchVector(query) {
-  const vector = Array(8).fill(0);
 
-  for (let i = 0; i < query.length; i++) {
-    vector[i % vector.length] += query.charCodeAt(i) / 255;
-  }
-
-  return vector;
-}
-
-async function runHybridDatasetSearch(datasetId, query) {
-  const body = {
-    vector: buildSearchVector(query),
-    alpha: state.spectralWeight,
-    k: 10,
-  };
-
-  return api(`/api/datasets/${encodeURIComponent(datasetId)}/search/hybrid`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
 
 async function buildDatasetIndex(datasetId) {
   return api(`/api/datasets/${encodeURIComponent(datasetId)}/index`, {
@@ -1241,6 +1099,8 @@ async function buildDatasetIndex(datasetId) {
 
 async function runSearch() {
   const query = $("#filter").value.trim();
+
+  state.searchQuery = query;
 
   if (
     query &&
@@ -1284,6 +1144,8 @@ async function runSearch() {
         <p>Searching LEAF prompt space...</p>
       </div>
     `;
+
+    const startedAt = performance.now();
     const result = await api("/api/prompts/nl_search", {
       method: "POST",
 
@@ -1296,13 +1158,23 @@ async function runSearch() {
       }),
     });
 
-    renderPromptResults(result.results || []);
+    const latencyMs = Math.round(performance.now() - startedAt);
+
+    renderPromptResults(result.results || [], {
+      latencyMs,
+      resultCount: result.result_count || 0,
+      tau,
+      alpha,
+      lam,
+    });
+
+    await renderSearchVisualizations(result.results || []);
 
     $("#health").textContent = "LEAF Ready";
     $("#health").className = "health ok";
 
     $("#search-mode-label").textContent =
-      `τ ${tau.toFixed(2)} · α ${alpha.toFixed(2)} · λ ${lam.toFixed(2)}`;
+      `τ ${tau.toFixed(2)} · semantic ${alpha.toFixed(2)} · diversity ${lam.toFixed(2)}`;
 
     $("#search-hint").textContent =
       `${result.result_count || 0} semantic results`;
@@ -1323,7 +1195,7 @@ async function runSearch() {
   }
 }
 
-function renderPromptResults(results) {
+function renderPromptResults(results, analytics = {}) {
   state.lastResults = results;
   if (!results.length) {
     $("#grid").innerHTML = `
@@ -1337,14 +1209,40 @@ function renderPromptResults(results) {
 
   $("#grid").innerHTML = `
     <div class="prompt-results">
-      ${results
-        .map((item, index) =>
-        renderPromptCard(item, index)
-      )
-      .join("")}
-    </div>
-  `;
-  wirePromptCards();
+      <div class="search-analytics">
+        <div>
+          <span>Latency</span>
+          <strong>${analytics.latencyMs ?? "—"} ms</strong>
+        </div>
+
+        <div>
+          <span>Results</span>
+          <strong>${analytics.resultCount ?? results.length}</strong>
+        </div>
+
+        <div>
+          <span>Tau</span>
+          <strong>${analytics.tau?.toFixed?.(2) ?? "—"}</strong>
+        </div>
+
+        <div>
+          <span>Alpha</span>
+          <strong>${analytics.alpha?.toFixed?.(2) ?? "—"}</strong>
+        </div>
+
+        <div>
+          <span>Lambda</span>
+          <strong>${analytics.lam?.toFixed?.(2) ?? "—"}</strong>
+        </div>
+      </div>
+        ${results
+          .map((item, index) =>
+          renderPromptCard(item, index)
+        )
+        .join("")}
+      </div>
+    `;
+    wirePromptCards();
 }
 
 function highlightQuery(text, query) {
@@ -1375,8 +1273,8 @@ function renderPromptCard(item, index) {
         </strong>
 
         <div class="prompt-score-wrap">
-          <span class="prompt-score-value">
-            ${(item.score ?? 0).toFixed(4)}
+          <span class="prompt-score">
+            Score: ${(item.score ?? 0).toFixed(4)}
           </span>
 
           <div class="prompt-score-bar">
@@ -1436,17 +1334,17 @@ function wirePromptCards() {
     card.classList.add("collapsed");
 
     const btn = card.querySelector(".prompt-toggle");
+    const idx = Number(card.dataset.index);
+
+    card.addEventListener("dblclick", () => {
+      openPromptModal(state.lastResults[idx]);
+    });
 
     card.addEventListener("click", (e) => {
       if (e.target.classList.contains("prompt-toggle")) {
         return;
       }
 
-      const idx = Number(card.dataset.index);
-
-      card.addEventListener("dblclick", () => {
-        openPromptModal(state.lastResults[idx]);
-      });
     });
 
     if (!btn) return;
@@ -2040,96 +1938,44 @@ function switchView(viewName) {
 
 function wireControls() {
   const alphaSlider = $("#alpha-slider");
-    if (alphaSlider) {
-      alphaSlider.addEventListener("input", (e) => {
-        $("#alpha-value").textContent = Number(e.target.value).toFixed(2);
+  if (alphaSlider) {
+    alphaSlider.addEventListener("input", (e) => {
+      $("#alpha-value").textContent = Number(e.target.value).toFixed(2);
 
-        clearTimeout(state.searchTimer);
-        state.searchTimer = setTimeout(() => {
-          runSearch();
-        }, 300);
-      });
-    }
+      clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(runSearch, 300);
+    });
+  }
 
-    const lamSlider = $("#lam-slider");
-    if (lamSlider) {
-      lamSlider.addEventListener("input", (e) => {
-        $("#lam-value").textContent = Number(e.target.value).toFixed(2);
+  const lamSlider = $("#lam-slider");
+  if (lamSlider) {
+    lamSlider.addEventListener("input", (e) => {
+      $("#lam-value").textContent = Number(e.target.value).toFixed(2);
 
-        clearTimeout(state.searchTimer);
-        state.searchTimer = setTimeout(() => {
-          runSearch();
-        }, 300);
-      });
-    }
+      clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(runSearch, 300);
+    });
+  }
+
   const searchTab = $("#tab-search");
-    if (searchTab) {
-      searchTab.addEventListener("click", () => switchView("search"));
-}
+  if (searchTab) {
+    searchTab.addEventListener("click", () => switchView("search"));
+  }
 
   const auditTab = $("#tab-audit");
-    if (auditTab) {
-      auditTab.addEventListener("click", () => switchView("audit"));
-    }
-}
+  if (auditTab) {
+    auditTab.addEventListener("click", () => switchView("audit"));
+  }
 
   const filter = $("#filter");
   if (filter) {
     filter.addEventListener("input", () => {
       clearTimeout(state.searchTimer);
-
-      state.searchTimer = setTimeout(() => {
-        runSearch();
-      }, 350);
+      state.searchTimer = setTimeout(runSearch, 350);
     });
-  }
 
-  const refreshBtn = $("#refresh-btn");
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", async () => {
-      refreshBtn.textContent = "⟳";
-
-      resetMetrics();
-
-      await refreshHealth();
-      await refreshDatasets();
-
-      refreshBtn.textContent = "↻";
-    });
-  }
-
-  const applySliceBtn = $("#apply-slice");
-  if (applySliceBtn) {
-    applySliceBtn.addEventListener("click", applySlice);
-  }
-
-  const resetSliceBtn = $("#reset-slice");
-  if (resetSliceBtn) {
-    resetSliceBtn.addEventListener("click", () => {
-      $("#slice-input").value = "";
-      applySlice();
-    });
-  }
-
-  const sliceInput = $("#slice-input");
-  if (sliceInput) {
-    sliceInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") applySlice();
-    });
-  }
-
-  const copyBtn = $("#copy-id-btn");
-  if (copyBtn) {
-    copyBtn.addEventListener("click", async () => {
-      if (!state.selected) return;
-
-      await navigator.clipboard.writeText(state.selected.id);
-
-      copyBtn.textContent = "Copied!";
-
-      setTimeout(() => {
-        copyBtn.textContent = "Copy Dataset ID";
-      }, 1200);
+    filter.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") runSearch();
     });
   }
 
@@ -2141,7 +1987,8 @@ function wireControls() {
       $("#spectral-value").textContent =
         state.spectralWeight.toFixed(2);
 
-      runSearch();
+      clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(runSearch, 300);
     });
   }
 
@@ -2151,20 +1998,26 @@ function wireControls() {
       $("#topk-value").textContent = e.target.value;
 
       clearTimeout(state.searchTimer);
-      state.searchTimer = setTimeout(() => {
-        runSearch();
-      }, 300);
+      state.searchTimer = setTimeout(runSearch, 300);
     });
-    $("#prompt-modal-close")?.addEventListener("click", () => {
-      $("#prompt-modal").classList.add("hidden");
-    });
+  }
 
-    $(".prompt-modal-backdrop")?.addEventListener("click", () => {
-      $("#prompt-modal").classList.add("hidden");
-    });
-    
-  renderRecentSearches();
+  $("#prompt-modal-close")?.addEventListener("click", () => {
+    $("#prompt-modal").classList.add("hidden");
+  });
+
+  $(".prompt-modal-backdrop")?.addEventListener("click", () => {
+    $("#prompt-modal").classList.add("hidden");
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      $("#prompt-modal")?.classList.add("hidden");
+    }
+  });
 }
+
+renderRecentSearches();
 
 
 (async function main() {
@@ -2189,6 +2042,8 @@ function wireControls() {
 function renderRecentSearches() {
   const el = $("#recent-searches");
 
+  if (!el) return;
+
   if (!state.recentSearches.length) {
     el.innerHTML = `
       <span class="signal-empty">
@@ -2203,6 +2058,7 @@ function renderRecentSearches() {
       (query) => `
         <button
           class="recent-search-chip"
+          type="button"
           data-query="${escapeHtml(query)}"
         >
           ${escapeHtml(query)}
@@ -2217,4 +2073,214 @@ function renderRecentSearches() {
       runSearch();
     });
   });
+}
+
+async function renderSearchVisualizations(results) {
+  const resultIds = new Set(
+    results.map((item) => item.id)
+  );
+
+  try {
+    const [audit, lambdas] = await Promise.all([
+      api("/api/prompts/audit"),
+      api("/api/prompts/lambdas"),
+    ]);
+
+    renderQueryManifold(audit, resultIds);
+    renderQueryLambdaChart(lambdas);
+
+  } catch (e) {
+    console.warn("Search visualizations unavailable:", e);
+  }
+}
+
+function renderQueryManifold(audit, resultIds) {
+  const el = $("#query-manifold");
+  if (!el || !audit?.pca_2d || !window.Plotly) return;
+
+  const points = audit.pca_2d;
+
+  const highlightedIndices = new Set(
+    [...resultIds]
+      .map((id) => Number(String(id).replace(/\D/g, "")))
+      .filter(Number.isFinite)
+  );
+
+  const xs = points.map((p) => Number(p[0]));
+  const ys = points.map((p) => Number(p[1]));
+
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  const gridSize = 45;
+  const z = [];
+
+  for (let gy = 0; gy < gridSize; gy++) {
+    const row = [];
+
+    for (let gx = 0; gx < gridSize; gx++) {
+      const x = minX + ((maxX - minX) * gx) / (gridSize - 1);
+      const y = minY + ((maxY - minY) * gy) / (gridSize - 1);
+
+      let density = 0;
+
+      for (let i = 0; i < points.length; i += 20) {
+        const dx = x - points[i][0];
+        const dy = y - points[i][1];
+
+        density += Math.exp(-(dx * dx + dy * dy) / 3.5);
+      }
+
+      row.push(density);
+    }
+
+    z.push(row);
+  }
+
+  const surface = {
+    z,
+    type: "surface",
+    colorscale: "Blues",
+    opacity: 0.88,
+    showscale: false,
+    name: "Laplacian Surface",
+  };
+
+  const highlighted = points
+    .map((p, i) => ({ p, i }))
+    .filter(({ i }) => highlightedIndices.has(i));
+
+  const scatter = {
+    x: highlighted.map(({ p }) => p[0]),
+    y: highlighted.map(({ p }) => p[1]),
+    z: highlighted.map(() => Math.max(...z.flat()) * 1.15),
+    type: "scatter3d",
+    mode: "markers",
+    name: "Matched Prompts",
+    marker: {
+      size: 5,
+      color: "#ff4d4d",
+      line: {
+        color: "#ffffff",
+        width: 1,
+      },
+    },
+  };
+
+  Plotly.newPlot(
+    el,
+    [surface, scatter],
+    {
+      title: {
+        text: "Graph Laplacian Manifold Interpretation",
+        font: { color: "#e2e8f0", size: 14 },
+      },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      scene: {
+        xaxis: {
+          title: "PCA 1",
+          gridcolor: "rgba(255,255,255,0.12)",
+          color: "#cbd5e1",
+        },
+        yaxis: {
+          title: "PCA 2",
+          gridcolor: "rgba(255,255,255,0.12)",
+          color: "#cbd5e1",
+        },
+        zaxis: {
+          title: "Node Degree / Density",
+          gridcolor: "rgba(255,255,255,0.12)",
+          color: "#cbd5e1",
+        },
+        bgcolor: "rgba(15,23,42,0.65)",
+        camera: {
+          eye: { x: 1.5, y: 1.6, z: 0.75 },
+        },
+      },
+      margin: { l: 0, r: 0, t: 45, b: 0 },
+      legend: {
+        font: { color: "#cbd5e1" },
+      },
+    },
+    {
+      responsive: true,
+      displayModeBar: false,
+    }
+  );
+}
+
+function renderQueryLambdaChart(data) {
+  const el = $("#query-lambda-chart");
+  if (!el || !data?.lambdas || !window.Plotly) return;
+
+  const lambdas = data.lambdas
+    .map(Number)
+    .filter(Number.isFinite);
+
+  const sorted = [...lambdas].sort((a, b) => a - b);
+  const ecdfY = sorted.map((_, i) => (i + 1) / sorted.length);
+
+  const histTrace = {
+    x: lambdas,
+    type: "histogram",
+    nbinsx: 60,
+    name: "Lambda Distribution",
+    marker: {
+      color: "rgba(124,92,255,0.75)",
+    },
+    opacity: 0.75,
+  };
+
+  const ecdfTrace = {
+    x: sorted,
+    y: ecdfY,
+    type: "scatter",
+    mode: "lines",
+    name: "Cumulative",
+    yaxis: "y2",
+    line: {
+      width: 3,
+      color: "#5ea2ff",
+    },
+  };
+
+  Plotly.newPlot(
+    el,
+    [histTrace, ecdfTrace],
+    {
+      title: {
+        text: `Spectral Fingerprint: ${lambdas.length} Samples`,
+        font: { color: "#e2e8f0", size: 14 },
+      },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(15,23,42,0.65)",
+      font: { color: "#cbd5e1" },
+      margin: { l: 45, r: 45, t: 45, b: 45 },
+      xaxis: {
+        title: "λ eigenvalue",
+        gridcolor: "rgba(255,255,255,0.08)",
+      },
+      yaxis: {
+        title: "Frequency",
+        gridcolor: "rgba(255,255,255,0.08)",
+      },
+      yaxis2: {
+        title: "ECDF",
+        overlaying: "y",
+        side: "right",
+        range: [0, 1],
+      },
+      legend: {
+        orientation: "h",
+        x: 0.02,
+        y: 1.12,
+      },
+    },
+    {
+      responsive: true,
+      displayModeBar: false,
+    }
+  );
 }

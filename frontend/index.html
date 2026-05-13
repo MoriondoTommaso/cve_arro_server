@@ -90,14 +90,15 @@
             />
 
             <p>
-              Higher tau increases spectral sharpness in ArrowSpace.
+              Higher τ increases spectral sharpness in ArrowSpace.
+              Recommended range: τ ≈ 0.7–1.0.
             </p>
           </div>
 
           <div class="spectral-control">
             <div class="spectral-label-row">
               <label for="alpha-slider">
-                Alpha semantic blend
+                Semantic / Spectral Balance
               </label>
 
               <span id="alpha-value">0.60</span>
@@ -113,14 +114,14 @@
             />
 
             <p>
-              0 = graph structure, 1 = cosine semantic similarity.
+              0 = graph structure, 1 = pure semantic similarity.
             </p>
           </div>
 
           <div class="spectral-control">
             <div class="spectral-label-row">
               <label for="lam-slider">
-                Lambda relevance/diversity
+                Result Diversity
               </label>
 
               <span id="lam-value">0.70</span>
@@ -136,7 +137,8 @@
             />
 
             <p>
-              1 = relevance, 0 = more diversity.
+              Higher values favor relevance.
+              Lower values increase diversity.
             </p>
             <div class="spectral-control">
               <div class="spectral-label-row">
@@ -195,6 +197,28 @@
                   Try queries like “fitness app translation” or
                   “software localization”.
                 </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="search-viz-grid">
+            <div class="panel">
+              <h3>Query Manifold View</h3>
+              <div class="manifold-plot-card">
+                <div id="query-manifold"></div>
+                <div id="query-manifold-tooltip" class="manifold-tooltip">
+                  Purple/red points = matched prompts · surface = corpus structure
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3>Spectral Fingerprint</h3>
+              <div class="manifold-plot-card">
+                <div id="query-lambda-chart"></div>
+                <div class="manifold-tooltip">
+                  Bars = eigenvalue density · curve = cumulative spectral mass
+                </div>
               </div>
             </div>
           </div>
@@ -268,6 +292,7 @@
         <div id="prompt-modal-body"></div>
       </div>
     </div>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>
