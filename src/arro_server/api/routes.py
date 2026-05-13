@@ -734,6 +734,21 @@ def prompts_audit() -> dict[str, Any]:
         coords = []
         explained_variance = []
 
+    # Build-time graph params used to construct ArrowSpace, exposed so the
+    # frontend can display the manifold/build settings in sync with the engine.
+    build_params: dict[str, Any] = {}
+    try:
+        gl_params = getattr(engine.gl, "graph_params", None)
+        if isinstance(gl_params, dict) and gl_params:
+            build_params = dict(gl_params)
+    except Exception:
+        build_params = {}
+    if not build_params:
+        from ..search_engine import _DEFAULT_BUILD_PARAMS
+        build_params = dict(_DEFAULT_BUILD_PARAMS)
+    # Ensure sigma key is always present (notebook explicitly sets sigma=None)
+    build_params.setdefault("sigma", None)
+
     payload = {
         "graph_stats": {
             "n_nodes": n,
@@ -755,6 +770,10 @@ def prompts_audit() -> dict[str, Any]:
                 "fraction": tail_fraction
             }
         },
+        # Per-node Laplacian diagonal (L_ii = degree of node i). Needed by the
+        # audit frontend to colour/elevate the 3D manifold surface like the
+        # reference Plotly script.
+        "degrees": degrees.tolist() if n > 0 else [],
         "spectral_stats": {
             "fiedler_value": float(fiedler_val),
             "spectral_gap": float(spectral_gap)
@@ -762,6 +781,7 @@ def prompts_audit() -> dict[str, Any]:
         "pca_2d": coords,
         "pca_explained_variance": explained_variance,
         "ids": engine.ids if hasattr(engine, 'ids') else [],
+        "build_params": build_params,
     }
     # Stash on the engine singleton so subsequent calls return instantly.
     try:
@@ -788,6 +808,7 @@ def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
             tau=body.tau,
             alpha=body.alpha,
             lam=body.lam,
+            salience=body.salience,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -813,6 +834,7 @@ def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:
             tau=body.tau,
             alpha=body.alpha,
             lam=body.lam,
+            salience=body.salience,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

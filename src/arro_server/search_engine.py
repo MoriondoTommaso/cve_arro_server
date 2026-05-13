@@ -35,7 +35,7 @@ _BUILD_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
 # Hardcoded fallback params used when tuner results are absent (fresh clone / container).
 # Values come from the tuner run documented in the notebook (search_engine_demo.ipynb cell 22):
 #   {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "sigma": None}
-_DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0}
+_DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "sigma": None}
 
 
 def _norm(arr: np.ndarray) -> np.ndarray:
@@ -287,19 +287,22 @@ class PromptSearchEngine:
     def search(
         self,
         query: np.ndarray,
-        tau: float   = DEFAULT_TAU,
-        alpha: float = 0.5,
-        lam: float   = LAM,
-        k: int       = 10,
+        tau: float      = DEFAULT_TAU,
+        alpha: float    = 0.5,
+        lam: float      = LAM,
+        k: int          = 10,
+        salience: float = SAL_WEIGHT,
     ) -> list[dict]:
         """Return top-k results using ArrowSpace spectral search + MMR re-ranking.
 
         Args:
-            query: 768-d query embedding (float64).
-            tau:   Spectral sharpness passed to ArrowSpace taumode search.
-            alpha: Blend factor. 0.0 = pure spectral, 1.0 = pure cosine similarity.
-            lam:   MMR diversity weight. 1.0 = pure relevance, 0.0 = maximum diversity.
-            k:     Number of results to return. Must be <= topk set at build time.
+            query:    768-d query embedding (float64).
+            tau:      Spectral sharpness passed to ArrowSpace taumode search.
+            alpha:    Blend factor. 0.0 = pure spectral, 1.0 = pure cosine similarity.
+            lam:      MMR diversity weight. 1.0 = pure relevance, 0.0 = maximum diversity.
+            k:        Number of results to return. Must be <= topk set at build time.
+            salience: Salience weight in [0, 1]. 0 disables metadata salience,
+                      1 gives it full influence in the combined score.
         """
         if query.ndim != 1 or query.shape[0] != _DIM:
             raise ValueError(f"Query vector must be 1-D with dim={_DIM}, got shape {query.shape}")
@@ -339,7 +342,8 @@ class PromptSearchEngine:
         sal_scores = self._compute_salience(raw_idxs)
 
         # 5. Combined score: relevance blend + saliency.
-        combined = (1.0 - SAL_WEIGHT) * relevance + SAL_WEIGHT * _norm(sal_scores)
+        sal_w = float(np.clip(salience, 0.0, 1.0))
+        combined = (1.0 - sal_w) * relevance + sal_w * _norm(sal_scores)
 
         # 6. MMR re-ranking.
         #    Use L2-normalised embeddings for inter-candidate cosine similarity

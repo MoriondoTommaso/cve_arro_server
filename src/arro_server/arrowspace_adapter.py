@@ -60,9 +60,9 @@ log = logging.getLogger(__name__)
 DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
     "eps": 1.2311,
     "k": 38,
-    "topk": 50,
+    "topk": 19,
     "p": 2.0,
-    "sigma": 1.0,
+    "sigma": None,
 }
 
 DEFAULT_SEARCH_K: int = 10

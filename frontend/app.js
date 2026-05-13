@@ -1157,7 +1157,8 @@ async function runSearch() {
     const tau = Number($("#spectral-slider").value);
     const alpha = Number($("#alpha-slider").value);
     const lam = Number($("#lam-slider").value);
-    
+    const salience = Number($("#salience-slider")?.value ?? 0.3);
+
     $("#grid").innerHTML = `
       <div class="loading-screen">
         <div class="loader"></div>
@@ -1171,10 +1172,11 @@ async function runSearch() {
 
       body: JSON.stringify({
         query,
-        k: Number($("#topk-select")?.value || 10),
+        k: Number($("#topk-select")?.value || 19),
         tau,
         alpha,
         lam,
+        salience,
       }),
     });
 
@@ -1186,6 +1188,7 @@ async function runSearch() {
       tau,
       alpha,
       lam,
+      salience,
     });
 
     await renderSearchVisualizations(result.results || []);
@@ -1194,7 +1197,7 @@ async function runSearch() {
     $("#health").className = "health ok";
 
     $("#search-mode-label").textContent =
-      `τ ${tau.toFixed(2)} · semantic ${alpha.toFixed(2)} · diversity ${lam.toFixed(2)}`;
+      `τ ${tau.toFixed(2)} · α ${alpha.toFixed(2)} (spectral↔cosine) · sal ${salience.toFixed(2)} · λ ${lam.toFixed(2)}`;
 
     $("#search-hint").textContent =
       `${result.result_count || 0} semantic results`;
@@ -1246,12 +1249,17 @@ function renderPromptResults(results, analytics = {}) {
         </div>
 
         <div>
-          <span>Alpha</span>
+          <span>Alpha (spectral↔cosine)</span>
           <strong>${analytics.alpha?.toFixed?.(2) ?? "—"}</strong>
         </div>
 
         <div>
-          <span>Lambda</span>
+          <span>Salience</span>
+          <strong>${analytics.salience?.toFixed?.(2) ?? "—"}</strong>
+        </div>
+
+        <div>
+          <span>MMR λ (diversity)</span>
           <strong>${analytics.lam?.toFixed?.(2) ?? "—"}</strong>
         </div>
       </div>
@@ -1481,11 +1489,11 @@ async function loadAuditPanel() {
 
     renderAuditHealth(health);
     renderAuditGraph(graph);
-    renderAuditLambdas(lambdas);
-    renderAuditStats(audit, lambdas);
+    renderAuditStats(audit);
+    renderAuditLambdas(audit, lambdas);
     renderAuditPCA(audit);
     renderAuditManifold(audit);
-    renderAuditSpectral(lambdas);
+    renderAuditSpectral(audit, lambdas);
 
   } catch (e) {
     console.error(e);
@@ -1567,76 +1575,62 @@ function renderAuditGraph(graph) {
   `;
 }
 
-function renderAuditLambdas(data) {
+function renderAuditLambdas(audit, lambdaData) {
   const container = $("#audit-lambdas");
 
   if (!container) return;
 
-  const lambdas = data.lambdas || [];
+  // Spectral Diagnostics is sourced strictly from /api/prompts/audit's
+  // spectral_stats block. Fiedler / spectral gap come from the normalised
+  // Laplacian eigensolve on the backend; we never derive them from the
+  // /lambdas sample histogram (which can include zeros and mislead).
+  const spectral = audit?.spectral_stats || {};
+  const fiedler = Number(spectral.fiedler_value ?? 0);
+  const gap = Number(spectral.spectral_gap ?? 0);
 
-  if (!lambdas.length) {
-    container.innerHTML = `
-      <div class="signal-empty">
-        No eigenvalues available.
-      </div>
-    `;
-    return;
-  }
+  const fiedlerColor = fiedler > 0.01
+    ? "#34d399"
+    : fiedler > 0.001
+      ? "#facc15"
+      : "#f87171";
 
-  const maxVal = Math.max(...lambdas, 1);
-
-  const bars = lambdas
-    .slice(0, 32)
-    .map((v) => {
-      const h = Math.max(4, (v / maxVal) * 100);
-
-      return `
-        <div class="lambda-bar-wrap">
-          <div
-            class="lambda-bar"
-            style="height:${h}%"
-            title="${v.toFixed(5)}"
-          ></div>
-        </div>
-      `;
-    })
-    .join("");
+  const lambdaSamples = Array.isArray(lambdaData?.lambdas)
+    ? lambdaData.lambdas.length
+    : 0;
 
   container.innerHTML = `
     <div class="signal-card">
       <span class="signal-label">Fiedler Value</span>
-      <strong>
-        ${(lambdas[1] ?? 0).toFixed(6)}
+      <strong style="color:${fiedlerColor}">
+        ${fiedler.toFixed(6)}
       </strong>
     </div>
 
     <div class="signal-card">
-      <span class="signal-label">Eigenvalue Count</span>
-      <strong>${data.n ?? lambdas.length}</strong>
+      <span class="signal-label">Spectral Gap</span>
+      <strong>${gap.toFixed(6)}</strong>
     </div>
 
-    <div class="lambda-bars">
-      ${bars}
+    <div class="signal-card">
+      <span class="signal-label">λ Samples</span>
+      <strong>${lambdaSamples || "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Source</span>
+      <strong>normalized L</strong>
     </div>
   `;
 }
 
-function renderAuditStats(audit, lambdas) {
+function renderAuditStats(audit) {
   const container = $("#audit-stats");
 
   if (!container) return;
 
-  const stats = audit.degree_stats || {};
-
-  const fiedler = (lambdas?.lambdas?.[1]) ?? audit.fiedler_value ?? 0;
-
-  let fiedlerColor = "#f87171";
-
-  if (fiedler > 0.01) {
-    fiedlerColor = "#34d399";
-  } else if (fiedler > 0.001) {
-    fiedlerColor = "#facc15";
-  }
+  const stats = audit?.degree_stats || {};
+  const graph = audit?.graph_stats || {};
+  const sparsity = Number(graph.sparsity ?? 0);
 
   container.innerHTML = `
     <div class="signal-card">
@@ -1660,10 +1654,13 @@ function renderAuditStats(audit, lambdas) {
     </div>
 
     <div class="signal-card">
-      <span class="signal-label">Fiedler Value</span>
-      <strong style="color:${fiedlerColor}">
-        ${fiedler.toFixed(6)}
-      </strong>
+      <span class="signal-label">Edges</span>
+      <strong>${graph.n_edges ?? "—"}</strong>
+    </div>
+
+    <div class="signal-card">
+      <span class="signal-label">Sparsity</span>
+      <strong>${sparsity ? sparsity.toFixed(6) : "—"}</strong>
     </div>
   `;
 }
@@ -1792,10 +1789,23 @@ function renderAuditPCA(audit) {
 
 function renderAuditManifold(audit) {
   renderQueryManifold(audit, new Set(), "#audit-query-manifold");
+  // Reflect server-side build params (eps/k/topk/p/sigma) in any display chips.
+  const bpEl = document.getElementById("build-params-display");
+  if (bpEl && audit?.build_params) {
+    const bp = audit.build_params;
+    const fmt = (v) => (v === null || v === undefined ? "None" : String(v));
+    bpEl.innerHTML = `<code>eps=${fmt(bp.eps)} · k=${fmt(bp.k)} · topk=${fmt(bp.topk)} · p=${fmt(bp.p)} · sigma=${fmt(bp.sigma)}</code>`;
+  }
 }
 
-function renderAuditSpectral(lambdas) {
-  renderQueryLambdaChart(lambdas, "#audit-spectral-fingerprint");
+function renderAuditSpectral(audit, lambdas) {
+  // Prefer eigenvalues stored on the audit payload if present, otherwise
+  // fall back to the dedicated /api/prompts/lambdas endpoint. Either way the
+  // audit panel is the single rendering pipeline (no per-search recompute).
+  const source = (audit && Array.isArray(audit.eigenvalues) && audit.eigenvalues.length)
+    ? { lambdas: audit.eigenvalues, n: audit.eigenvalues.length }
+    : lambdas;
+  renderQueryLambdaChart(source, "#audit-spectral-fingerprint");
 }
 
 
@@ -1988,6 +1998,16 @@ function wireControls() {
     });
   }
 
+  const salienceSlider = $("#salience-slider");
+  if (salienceSlider) {
+    salienceSlider.addEventListener("input", (e) => {
+      $("#salience-value").textContent = Number(e.target.value).toFixed(2);
+
+      clearTimeout(state.searchTimer);
+      state.searchTimer = setTimeout(runSearch, 300);
+    });
+  }
+
   const searchTab = $("#tab-search");
   if (searchTab) {
     searchTab.addEventListener("click", () => switchView("search"));
@@ -2147,114 +2167,263 @@ async function renderSearchVisualizations(results) {
   }
 }
 
+// Lightweight quantile (linear interpolation between samples).
+function _quantile(sorted, q) {
+  if (!sorted.length) return 0;
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (base + 1 < sorted.length) {
+    return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+  }
+  return sorted[base];
+}
+
+// Inverse-distance-weighted interpolation onto a regular grid. Cheap enough
+// in JS for ~20k points × 60×60 grid using stride sampling, but we further
+// limit the per-cell loop with a stride so the demo stays responsive.
+function _idwGrid(xs, ys, zs, gridSize, power = 2) {
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const dx = (maxX - minX) || 1;
+  const dy = (maxY - minY) || 1;
+  const stride = Math.max(1, Math.floor(xs.length / 4000));
+  // smoothing length proportional to grid cell size
+  const sigma2 = Math.pow((dx + dy) / (2 * gridSize), 2) * 4;
+
+  const gridX = new Array(gridSize);
+  const gridY = new Array(gridSize);
+  for (let i = 0; i < gridSize; i++) {
+    gridX[i] = minX + (dx * i) / (gridSize - 1);
+    gridY[i] = minY + (dy * i) / (gridSize - 1);
+  }
+
+  const z = [];
+  for (let gy = 0; gy < gridSize; gy++) {
+    const row = new Array(gridSize);
+    const y = gridY[gy];
+    for (let gx = 0; gx < gridSize; gx++) {
+      const x = gridX[gx];
+      let num = 0;
+      let den = 0;
+      for (let i = 0; i < xs.length; i += stride) {
+        const ddx = x - xs[i];
+        const ddy = y - ys[i];
+        const d2 = ddx * ddx + ddy * ddy + 1e-9;
+        // Gaussian-like falloff (smoother than pure IDW at small radii)
+        const w = Math.exp(-d2 / sigma2) / Math.pow(d2, power / 2);
+        num += w * zs[i];
+        den += w;
+      }
+      row[gx] = den > 0 ? num / den : 0;
+    }
+    z.push(row);
+  }
+  return { z, gridX, gridY };
+}
+
 function renderQueryManifold(audit, resultIds, target = "#query-manifold") {
   const el = typeof target === "string" ? $(target) : target;
   if (!el || !audit?.pca_2d || !window.Plotly) return;
 
   const points = audit.pca_2d;
+  const ids = audit.ids || [];
+  const explained = audit.pca_explained_variance || [];
+  const pc1Pct = explained[0] != null ? (explained[0] * 100).toFixed(1) : "—";
+  const pc2Pct = explained[1] != null ? (explained[1] * 100).toFixed(1) : "—";
 
-  const highlightedIndices = new Set(
-    [...resultIds]
-      .map((id) => Number(String(id).replace(/\D/g, "")))
-      .filter(Number.isFinite)
-  );
+  let degrees = audit.degrees;
+  if (!Array.isArray(degrees) || degrees.length !== points.length) {
+    degrees = new Array(points.length).fill(1);
+  }
+  const degArr = degrees.map(Number);
+
+  // Robust degree clipping (p02..p98). A handful of hubs in a 20k corpus
+  // otherwise wash the surface flat.
+  const sortedDeg = [...degArr].sort((a, b) => a - b);
+  const p02 = _quantile(sortedDeg, 0.02);
+  const p98 = _quantile(sortedDeg, 0.98);
+  const degClipped = degArr.map((d) => Math.min(Math.max(d, p02), p98));
 
   const xs = points.map((p) => Number(p[0]));
   const ys = points.map((p) => Number(p[1]));
 
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
+  const highlightedIndices = new Set(
+    [...resultIds]
+      .map((id) => {
+        const m = String(id).match(/\d+/);
+        return m ? Number(m[0]) : NaN;
+      })
+      .filter(Number.isFinite)
+  );
 
-  const gridSize = 45;
-  const z = [];
+  // Detect audit panel target so we can spend more budget on grid resolution
+  // and a denser scatter overlay there. Search-side view stays light.
+  const isAuditTarget = typeof target === "string"
+    && target.includes("audit-query-manifold");
+  const gridSize = isAuditTarget ? 110 : 80;
+  const { z, gridX, gridY } = _idwGrid(xs, ys, degClipped, gridSize, 2);
 
-  for (let gy = 0; gy < gridSize; gy++) {
-    const row = [];
-
-    for (let gx = 0; gx < gridSize; gx++) {
-      const x = minX + ((maxX - minX) * gx) / (gridSize - 1);
-      const y = minY + ((maxY - minY) * gy) / (gridSize - 1);
-
-      let density = 0;
-
-      for (let i = 0; i < points.length; i += 20) {
-        const dx = x - points[i][0];
-        const dy = y - points[i][1];
-
-        density += Math.exp(-(dx * dx + dy * dy) / 3.5);
-      }
-
-      row.push(density);
-    }
-
-    z.push(row);
-  }
+  // z-range clipped to surface percentiles so the colorbar stays meaningful.
+  const flatZ = z.flat().filter(Number.isFinite);
+  const sortedZ = [...flatZ].sort((a, b) => a - b);
+  const zMin = _quantile(sortedZ, 0.02);
+  const zMax = _quantile(sortedZ, 0.98);
 
   const surface = {
+    x: gridX,
+    y: gridY,
     z,
     type: "surface",
-    colorscale: "Blues",
-    opacity: 0.88,
-    showscale: false,
-    name: "Laplacian Surface",
+    colorscale: [
+      [0.0, "#1e3a8a"],
+      [0.25, "#2c5dff"],
+      [0.5, "#f8fafc"],
+      [0.75, "#fb7185"],
+      [1.0, "#ef4444"],
+    ],
+    cmin: zMin,
+    cmax: zMax,
+    opacity: 0.94,
+    showscale: true,
+    colorbar: {
+      title: { text: "Node Degree (Lᵢᵢ)", font: { color: "#cbd5e1", size: 12 } },
+      tickfont: { color: "#cbd5e1" },
+      thickness: 14,
+      len: 0.78,
+      x: 1.02,
+    },
+    contours: {
+      z: {
+        show: true,
+        usecolormap: true,
+        highlightcolor: "#ffffff",
+        project: { z: true },
+      },
+    },
+    lighting: {
+      ambient: 0.65,
+      diffuse: 0.85,
+      specular: 0.18,
+      roughness: 0.55,
+    },
+    name: "Laplacian surface",
   };
 
-  const highlighted = points
-    .map((p, i) => ({ p, i }))
-    .filter(({ i }) => highlightedIndices.has(i));
-
-  const scatter = {
-    x: highlighted.map(({ p }) => p[0]),
-    y: highlighted.map(({ p }) => p[1]),
-    z: highlighted.map(() => Math.max(...z.flat()) * 1.15),
+  // Background point cloud — light, downsampled, sits below the surface to
+  // anchor the manifold structure when the surface is rotated.
+  const cloudStride = Math.max(1, Math.floor(points.length / 4000));
+  const cloudIdx = [];
+  for (let i = 0; i < points.length; i += cloudStride) cloudIdx.push(i);
+  const cloudTrace = {
+    x: cloudIdx.map((i) => xs[i]),
+    y: cloudIdx.map((i) => ys[i]),
+    z: cloudIdx.map(() => zMin),
     type: "scatter3d",
     mode: "markers",
-    name: "Matched Prompts",
+    name: "Corpus nodes",
+    hoverinfo: "skip",
     marker: {
-      size: 5,
-      color: "#ff4d4d",
-      line: {
-        color: "#ffffff",
-        width: 1,
-      },
+      size: 1.6,
+      color: cloudIdx.map((i) => degClipped[i]),
+      colorscale: surface.colorscale,
+      cmin: zMin,
+      cmax: zMax,
+      opacity: 0.55,
+      showscale: false,
     },
   };
 
+  // High-degree hubs (top 2%) as 3D markers above the surface peak.
+  const hubThreshold = _quantile(sortedDeg, 0.98);
+  const hubIdxs = [];
+  for (let i = 0; i < degArr.length; i++) {
+    if (degArr[i] >= hubThreshold) hubIdxs.push(i);
+  }
+  const hubLift = zMax + (zMax - zMin) * 0.06;
+  const hubsTrace = {
+    x: hubIdxs.map((i) => xs[i]),
+    y: hubIdxs.map((i) => ys[i]),
+    z: hubIdxs.map(() => hubLift),
+    type: "scatter3d",
+    mode: "markers",
+    name: "High-degree hubs",
+    text: hubIdxs.map((i) => `${ids[i] ?? `#${i}`} (Lᵢᵢ=${degArr[i].toFixed(3)})`),
+    hoverinfo: "text",
+    marker: {
+      size: 4.5,
+      color: "#fbbf24",
+      line: { color: "#ffffff", width: 0.6 },
+      symbol: "diamond",
+    },
+  };
+
+  const matched = [...highlightedIndices].filter(
+    (i) => i >= 0 && i < points.length
+  );
+  const matchedTrace = {
+    x: matched.map((i) => xs[i]),
+    y: matched.map((i) => ys[i]),
+    z: matched.map(() => hubLift + (zMax - zMin) * 0.08),
+    type: "scatter3d",
+    mode: "markers",
+    name: "Matched prompts",
+    text: matched.map((i) => ids[i] ?? `#${i}`),
+    hoverinfo: "text",
+    marker: {
+      size: 5.5,
+      color: "#ef4444",
+      line: { color: "#ffffff", width: 1.1 },
+      symbol: "circle",
+    },
+  };
+
+  const data = [cloudTrace, surface, hubsTrace];
+  if (matched.length) data.push(matchedTrace);
+
   Plotly.newPlot(
     el,
-    [surface, scatter],
+    data,
     {
-      title: {
-        text: "Graph Laplacian Manifold Interpretation",
-        font: { color: "#e2e8f0", size: 14 },
-      },
       paper_bgcolor: "rgba(0,0,0,0)",
+      font: { color: "#cbd5e1" },
       scene: {
         xaxis: {
-          title: "PCA 1",
-          gridcolor: "rgba(255,255,255,0.12)",
+          title: `PC1 (${pc1Pct}%)`,
+          gridcolor: "rgba(255,255,255,0.10)",
+          zerolinecolor: "rgba(255,255,255,0.18)",
           color: "#cbd5e1",
         },
         yaxis: {
-          title: "PCA 2",
-          gridcolor: "rgba(255,255,255,0.12)",
+          title: `PC2 (${pc2Pct}%)`,
+          gridcolor: "rgba(255,255,255,0.10)",
+          zerolinecolor: "rgba(255,255,255,0.18)",
           color: "#cbd5e1",
         },
         zaxis: {
-          title: "Node Degree / Density",
-          gridcolor: "rgba(255,255,255,0.12)",
+          title: "Node Degree (Lᵢᵢ)",
+          gridcolor: "rgba(255,255,255,0.10)",
+          zerolinecolor: "rgba(255,255,255,0.18)",
           color: "#cbd5e1",
+          range: [zMin, hubLift + (zMax - zMin) * 0.18],
         },
-        bgcolor: "rgba(15,23,42,0.65)",
+        bgcolor: "rgba(15,23,42,0.92)",
+        aspectmode: "manual",
+        aspectratio: { x: 1.35, y: 1.1, z: 0.85 },
         camera: {
-          eye: { x: 1.5, y: 1.6, z: 0.75 },
+          eye: { x: 1.55, y: 1.55, z: 0.95 },
+          up: { x: 0, y: 0, z: 1 },
         },
       },
-      margin: { l: 0, r: 0, t: 45, b: 0 },
+      margin: { l: 0, r: 0, t: 20, b: 0 },
       legend: {
         font: { color: "#cbd5e1" },
+        orientation: "h",
+        x: 0,
+        y: 1.04,
+        bgcolor: "rgba(15,23,42,0)",
       },
     },
     {
@@ -2272,64 +2441,172 @@ function renderQueryLambdaChart(data, target = "#query-lambda-chart") {
     .map(Number)
     .filter(Number.isFinite);
 
+  if (!lambdas.length) return;
+
   const sorted = [...lambdas].sort((a, b) => a - b);
-  const ecdfY = sorted.map((_, i) => (i + 1) / sorted.length);
+  const n = sorted.length;
+  const lambdaMax = sorted[n - 1] || 1;
+
+  const p25 = _quantile(sorted, 0.25);
+  const p50 = _quantile(sorted, 0.50);
+  const p75 = _quantile(sorted, 0.75);
+  const p60 = _quantile(sorted, 0.60);
+
+  // Histogram clipped at p60.
+  const NBINS = 200;
+  const xMaxHist = Math.max(p60, 1e-9);
+  const binWidth = xMaxHist / NBINS;
+  const bulkX = sorted.filter((v) => v <= p60);
+  const tailCount = n - bulkX.length;
+  const tailPct = (tailCount / n) * 100;
 
   const histTrace = {
-    x: lambdas,
+    x: bulkX,
     type: "histogram",
-    nbinsx: 60,
-    name: "Lambda Distribution",
+    name: "λ histogram",
+    xbins: { start: 0, end: xMaxHist, size: binWidth },
     marker: {
-      color: "rgba(124,92,255,0.75)",
+      color: "rgba(94,162,255,0.78)",
+      line: { color: "rgba(94,162,255,1.0)", width: 0.4 },
     },
-    opacity: 0.75,
+    opacity: 0.92,
+    xaxis: "x",
+    yaxis: "y",
+    showlegend: false,
   };
 
+  // ECDF over [0, lambdaMax].
+  const ecdfY = sorted.map((_, i) => (i + 1) / n);
   const ecdfTrace = {
     x: sorted,
     y: ecdfY,
     type: "scatter",
     mode: "lines",
-    name: "Cumulative",
+    name: "ECDF",
+    line: { width: 2.5, color: "#7c5cff" },
+    xaxis: "x2",
     yaxis: "y2",
-    line: {
-      width: 3,
-      color: "#5ea2ff",
-    },
+    showlegend: false,
   };
+
+  const quartileMarkers = [
+    { x: p25, color: "#34d399", label: "p25" },
+    { x: p50, color: "#fbbf24", label: "median" },
+    { x: p75, color: "#f87171", label: "p75" },
+  ];
+  const ecdfShapes = quartileMarkers.map((q) => ({
+    type: "line",
+    xref: "x2",
+    yref: "y2",
+    x0: q.x,
+    x1: q.x,
+    y0: 0,
+    y1: 1,
+    line: { color: q.color, width: 2, dash: "dash" },
+  }));
+
+  // Histogram subplot title (drawn as paper-anchored annotation to avoid
+  // colliding with the global plot title).
+  const histTitle = {
+    xref: "paper",
+    yref: "paper",
+    x: 0.0,
+    y: 1.0,
+    text: `<b>λ Histogram</b> · ${n.toLocaleString()} samples · clipped at p60=${p60.toFixed(4)}`,
+    showarrow: false,
+    align: "left",
+    xanchor: "left",
+    yanchor: "bottom",
+    font: { color: "#e2e8f0", size: 12 },
+  };
+
+  // ECDF subplot title.
+  const ecdfTitle = {
+    xref: "paper",
+    yref: "paper",
+    x: 0.0,
+    y: 0.46,
+    text: "<b>ECDF</b> · full λ range",
+    showarrow: false,
+    align: "left",
+    xanchor: "left",
+    yanchor: "bottom",
+    font: { color: "#e2e8f0", size: 12 },
+  };
+
+  const tailAnnotation = {
+    xref: "paper",
+    yref: "paper",
+    x: 0.99,
+    y: 0.99,
+    text: `Tail (λ &gt; p60): ${tailCount} samples (${tailPct.toFixed(1)}%) up to λ=${lambdaMax.toFixed(3)}`,
+    showarrow: false,
+    align: "right",
+    xanchor: "right",
+    yanchor: "top",
+    bgcolor: "rgba(15,23,42,0.85)",
+    bordercolor: "rgba(124,92,255,0.6)",
+    borderwidth: 1,
+    font: { color: "#fbbf24", size: 11 },
+  };
+
+  const quartileAnnotations = quartileMarkers.map((q) => ({
+    xref: "x2",
+    yref: "paper",
+    x: q.x,
+    y: 0.42,
+    text: `${q.label}=${q.x.toFixed(4)}`,
+    showarrow: false,
+    yanchor: "top",
+    xanchor: "left",
+    font: { color: q.color, size: 11 },
+  }));
 
   Plotly.newPlot(
     el,
     [histTrace, ecdfTrace],
     {
-      title: {
-        text: `Spectral Fingerprint: ${lambdas.length} Samples`,
-        font: { color: "#e2e8f0", size: 14 },
-      },
+      // Plot title is omitted — the panel's <h3> already labels this chart.
+      // The histogram and ECDF carry their own paper-anchored subtitles below.
       paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(15,23,42,0.65)",
+      plot_bgcolor: "rgba(15,23,42,0.85)",
       font: { color: "#cbd5e1" },
-      margin: { l: 45, r: 45, t: 45, b: 45 },
+      margin: { l: 64, r: 32, t: 40, b: 56 },
       xaxis: {
-        title: "λ eigenvalue",
+        title: "λ eigenvalue (bulk)",
         gridcolor: "rgba(255,255,255,0.08)",
+        range: [0, xMaxHist],
+        domain: [0, 1],
+        anchor: "y",
       },
       yaxis: {
-        title: "Frequency",
+        title: "count",
         gridcolor: "rgba(255,255,255,0.08)",
+        domain: [0.56, 0.96],
+        anchor: "x",
+      },
+      xaxis2: {
+        title: "λ eigenvalue (full range)",
+        gridcolor: "rgba(255,255,255,0.08)",
+        range: [0, lambdaMax],
+        domain: [0, 1],
+        anchor: "y2",
       },
       yaxis2: {
         title: "ECDF",
-        overlaying: "y",
-        side: "right",
+        gridcolor: "rgba(255,255,255,0.08)",
         range: [0, 1],
+        domain: [0, 0.42],
+        anchor: "x2",
       },
-      legend: {
-        orientation: "h",
-        x: 0.02,
-        y: 1.12,
-      },
+      shapes: ecdfShapes,
+      annotations: [
+        histTitle,
+        ecdfTitle,
+        tailAnnotation,
+        ...quartileAnnotations,
+      ],
+      showlegend: false,
     },
     {
       responsive: true,

@@ -62,8 +62,9 @@ class PromptSearchRequest(BaseModel):
     vector: list[float] = Field(..., description="768-dim nomic-embed-text-v1.5 query vector.")
     k: int              = Field(10, ge=1, le=100, description="Number of results to return.")
     tau: float          = Field(0.75, ge=0.0, le=5.0, description="Spectral sharpness (0=broad, 5=sharp). Default 0.75.")
-    alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend.")
+    alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Spectral-vs-cosine blend in ArrowSpace search. 0=pure spectral, 1=pure cosine.")
     lam: float          = Field(0.7, ge=0.0, le=1.0, description="MMR diversity weight (1.0=pure relevance, 0.0=max diversity).")
+    salience: float     = Field(0.3, ge=0.0, le=1.0, description="Metadata salience influence. 0=disabled, 1=full salience.")
 
     @model_validator(mode="after")
     def _check_vector_dim(self) -> "PromptSearchRequest":
@@ -82,8 +83,9 @@ class NLSearchRequest(BaseModel):
     query: str   = Field(..., min_length=1, max_length=2048, description="Natural language search query.")
     k: int       = Field(10, ge=1, le=100, description="Number of results to return.")
     tau: float   = Field(0.75, ge=0.0, le=5.0, description="Spectral sharpness. Default 0.75.")
-    alpha: float = Field(0.6, ge=0.0, le=1.0, description="Cosine vs spectral blend.")
+    alpha: float = Field(0.6, ge=0.0, le=1.0, description="Spectral-vs-cosine blend in ArrowSpace search. 0=pure spectral, 1=pure cosine.")
     lam: float   = Field(0.7, ge=0.0, le=1.0, description="MMR diversity weight.")
+    salience: float = Field(0.3, ge=0.0, le=1.0, description="Metadata salience influence. 0=disabled, 1=full salience.")
 
 
 class PromptSearchResult(BaseModel):

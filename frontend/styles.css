@@ -1729,16 +1729,70 @@ td.row-idx {
   min-height: 0;
 }
 
+#audit-view:not(.hidden) {
+  display: flex;
+  flex-direction: column;
+}
+
 .audit-content {
   width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.audit-content > .content-header {
+  flex: 0 0 auto;
 }
 
 .audit-panels {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 18px;
   padding: 24px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+}
+
+.audit-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+.audit-kpi-card {
+  min-height: 0;
+}
+
+.audit-kpi-card .metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.audit-kpi-card .signal-card {
+  padding: 10px 12px;
+}
+
+.audit-kpi-card .signal-card strong {
+  font-size: 0.98rem;
+}
+
+.audit-full-row {
+  width: 100%;
+}
+
+.audit-full-row .audit-plot-area {
+  width: 100%;
+  min-height: 720px;
+  height: 720px;
+}
+
+.audit-half-row {
+  width: 100%;
 }
 
 /* =========================
@@ -2211,3 +2265,29 @@ td.row-idx {
 
   letter-spacing: 0.04em;
 }
+
+.build-params-display {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(94, 162, 255, 0.25);
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: #d9e8ff;
+  letter-spacing: 0.02em;
+  word-break: break-word;
+}
+.build-params-display code {
+  display: block;
+  line-height: 1.4;
+}
+
+#audit-query-manifold {
+  min-height: 720px;
+  width: 100%;
+}
+#audit-spectral-fingerprint {
+  min-height: 660px;
+  width: 100%;
+}
+

@@ -98,7 +98,7 @@
           <div class="spectral-control">
             <div class="spectral-label-row">
               <label for="alpha-slider">
-                Semantic / Spectral Balance
+                Spectral ↔ Cosine (α)
               </label>
 
               <span id="alpha-value">0.60</span>
@@ -109,19 +109,46 @@
               type="range"
               min="0"
               max="1"
-              step="0.05"
+              step="0.01"
               value="0.6"
             />
 
             <p>
-              0 = graph structure, 1 = pure semantic similarity.
+              ArrowSpace spectral-vs-cosine mix.
+              <strong>0 = pure spectral</strong> (graph Laplacian);
+              <strong>1 = pure cosine</strong> similarity.
+            </p>
+          </div>
+
+          <div class="spectral-control">
+            <div class="spectral-label-row">
+              <label for="salience-slider">
+                Metadata Salience
+              </label>
+
+              <span id="salience-value">0.30</span>
+            </div>
+
+            <input
+              id="salience-slider"
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value="0.3"
+            />
+
+            <p>
+              Weight of metadata salience (upvotes / likes / reputation / views)
+              in the final score. <strong>0 disables</strong> metadata salience,
+              <strong>1 gives</strong> it full influence.
             </p>
           </div>
 
           <div class="spectral-control">
             <div class="spectral-label-row">
               <label for="lam-slider">
-                Result Diversity
+                Result Diversity (λ MMR)
               </label>
 
               <span id="lam-value">0.70</span>
@@ -132,13 +159,13 @@
               type="range"
               min="0"
               max="1"
-              step="0.05"
+              step="0.01"
               value="0.7"
             />
 
             <p>
-              Higher values favor relevance.
-              Lower values increase diversity.
+              MMR re-ranking weight. Higher values favor relevance;
+              lower values increase diversity.
             </p>
             <div class="spectral-control">
               <div class="spectral-label-row">
@@ -146,18 +173,35 @@
                   Top-K results
                 </label>
 
-                <span id="topk-value">10</span>
+                <span id="topk-value">19</span>
               </div>
 
               <select id="topk-select" class="leaf-select">
                 <option value="5">5</option>
-                <option value="10" selected>10</option>
+                <option value="10">10</option>
+                <option value="19" selected>19</option>
                 <option value="25">25</option>
                 <option value="50">50</option>
               </select>
 
               <p>
                 Number of prompt results returned by LEAF.
+                Default matches the build-time topk (19).
+              </p>
+            </div>
+
+            <div class="spectral-control">
+              <div class="spectral-label-row">
+                <label>Manifold Build Params</label>
+              </div>
+
+              <div id="build-params-display" class="build-params-display">
+                <code>eps=1.2311 · k=38 · topk=19 · p=2.0 · sigma=None</code>
+              </div>
+
+              <p>
+                ArrowSpace graph-Laplacian build parameters used to construct
+                the manifold index.
               </p>
             </div>
               <div class="spectral-control">
@@ -243,29 +287,46 @@
           </header>
 
           <div id="audit-content" class="audit-panels">
-            <div class="panel">
-              <h3>System Status</h3>
-              <div id="audit-health" class="metadata-grid"></div>
+            <div class="audit-kpi-row">
+              <div class="panel audit-kpi-card">
+                <h3>System Status</h3>
+                <div id="audit-health" class="metadata-grid"></div>
+              </div>
+
+              <div class="panel audit-kpi-card">
+                <h3>Corpus KPIs</h3>
+                <div id="audit-graph" class="metadata-grid"></div>
+              </div>
+
+              <div class="panel audit-kpi-card">
+                <h3>Graph Statistics</h3>
+                <div id="audit-stats" class="metadata-grid"></div>
+              </div>
+
+              <div class="panel audit-kpi-card">
+                <h3>Spectral Diagnostics</h3>
+                <div id="audit-lambdas" class="metadata-grid"></div>
+              </div>
             </div>
 
-            <div class="panel">
-              <h3>Corpus KPIs</h3>
-              <div id="audit-graph" class="metadata-grid"></div>
+            <div class="panel audit-full-row">
+              <h3>Graph Laplacian Manifold</h3>
+              <div id="audit-query-manifold" class="audit-plot-area"></div>
+              <div class="manifold-tooltip">
+                Surface = corpus Laplacian degree (Lᵢᵢ) over PCA-2D · diamonds = high-degree hubs · red = matched prompts
+              </div>
             </div>
 
-            <div class="panel">
-              <h3>Graph Statistics</h3>
-              <div id="audit-stats" class="metadata-grid"></div>
+            <div class="panel audit-full-row">
+              <h3>Spectral Fingerprint</h3>
+              <div id="audit-spectral-fingerprint" class="audit-plot-area"></div>
+              <div class="manifold-tooltip">
+                Top = λ histogram clipped at p60 · Bottom = ECDF over [0, λ_max] with p25/median/p75 markers
+              </div>
             </div>
 
-            <div class="panel">
-              <h3>Spectral Diagnostics</h3>
-              <div id="audit-lambdas" class="signals-grid"></div>
-            </div>
-
-            <div class="panel">
+            <div class="panel audit-half-row">
               <h3>PCA 2D Map</h3>
-
               <div class="manifold-plot-card">
                 <div class="manifold-canvas-stack">
                   <canvas id="audit-pca"></canvas>
@@ -274,16 +335,6 @@
                   Hover points
                 </div>
               </div>
-            </div>
-
-            <div class="panel">
-              <h3>Query Manifold View</h3>
-              <div id="audit-query-manifold"></div>
-            </div>
-
-            <div class="panel">
-              <h3>Spectral Fingerprint</h3>
-              <div id="audit-spectral-fingerprint"></div>
             </div>
           </div>
         </section>
