@@ -219,7 +219,7 @@ def dataset_stats(
     try:
         return adapter.stats_data(h.summary.dataset_id)    
     except Exception:
-        pass  # fallback sidecar se vuoi mantenerlo
+        return {} 
 
 
 @router.get("/datasets/{dataset_id}/manifold")
@@ -234,7 +234,7 @@ def dataset_manifold(
     try:
         return adapter.manifold_data(h.summary.dataset_id) 
     except Exception:
-        pass
+        return {} 
 
 
 @router.get("/datasets/{dataset_id}/search")
