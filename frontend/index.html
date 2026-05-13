@@ -198,6 +198,28 @@
               </div>
             </div>
           </div>
+
+          <div class="search-viz-grid">
+            <div class="panel">
+              <h3>Query Manifold View</h3>
+              <div class="manifold-plot-card">
+                <div id="query-manifold"></div>
+                <div id="query-manifold-tooltip" class="manifold-tooltip">
+                  Search-linked manifold projection
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3>Spectral Fingerprint</h3>
+              <div class="manifold-plot-card">
+                <div id="query-lambda-chart"></div>
+                <div class="manifold-tooltip">
+                  Lambda distribution of the prompt graph
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
       </section>
 
@@ -268,6 +290,7 @@
         <div id="prompt-modal-body"></div>
       </div>
     </div>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>
