@@ -52,6 +52,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import scipy.sparse as sp              
+import scipy.sparse.linalg as spla
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .. import __version__
@@ -219,7 +221,7 @@ def dataset_stats(
     try:
         return adapter.stats_data(h.summary.dataset_id)    
     except Exception:
-        pass  # fallback sidecar se vuoi mantenerlo
+        return {} 
 
 
 @router.get("/datasets/{dataset_id}/manifold")
@@ -234,7 +236,7 @@ def dataset_manifold(
     try:
         return adapter.manifold_data(h.summary.dataset_id) 
     except Exception:
-        pass
+        return {} 
 
 
 @router.get("/datasets/{dataset_id}/search")
@@ -648,57 +650,111 @@ def prompts_graph_laplacian() -> dict[str, Any]:
 @router.get("/prompts/audit")
 def prompts_audit() -> dict[str, Any]:
     engine = _get_engine()
+    
     try:
-        from sklearn.decomposition import PCA  # type: ignore
+        from sklearn.decomposition import PCA
     except ImportError as exc:
-        raise HTTPException(status_code=501, detail="scikit-learn is required for /prompts/audit.") from exc
+        raise HTTPException(
+            status_code=501, 
+            detail="scikit-learn is required for /prompts/audit."
+        ) from exc
 
+
+    n = engine.aspace.nfeatures if hasattr(engine, 'aspace') else 0
+    degrees = np.zeros(n)
+    fiedler_val, spectral_gap = 0.0, 0.0
+    hub_count, isolated_count = 0, 0
+    hub_fraction, tail_fraction = 0.0, 0.0
+    n_edges, sparsity, degree_cv = 0, 1.0, 0.0
+
+    
     try:
-        gl_dense = engine.gl.to_dense()
-        degrees  = np.array(gl_dense.sum(axis=1)).ravel() + gl_dense.diagonal()
-    except Exception:
-        degrees = np.zeros(engine.aspace.nitems)
+        data, indices, indptr, shape = engine.gl.to_csr()
+        L = sp.csr_matrix(
+            (np.array(data, dtype=np.float64),
+             np.array(indices, dtype=np.int32),
+             np.array(indptr, dtype=np.int32)),
+            shape=tuple(shape),
+        )
+        
+        n = L.shape[0]
+        nnz = L.nnz
+        
+        if n > 0:
+            n_edges = (nnz - n) // 2
+            sparsity = 1.0 - (nnz / (n * n))
+            
+            # 3. Extract Degrees
+            degrees = np.array(L.diagonal(), dtype=np.float64)
+            avg_degree = float(degrees.mean())
+            std_degree = float(degrees.std())
+            degree_cv = std_degree / avg_degree if avg_degree > 0 else 0.0
+            
+            # 4. Degree Buckets (Hubs & Tails)
+            p10, p90 = np.percentile(degrees, [10, 90])
+            hub_count = int((degrees > p90).sum())
+            isolated_count = int((degrees < p10).sum())
+            hub_fraction = float(hub_count / n)
+            tail_fraction = float(isolated_count / n)
+            
+            # 5. Fiedler & Spectral Gap (via Normalized Laplacian)
+            try:
+                safe_d = np.where(degrees > 1e-12, degrees, 1e-12)
+                d_inv_sqrt = sp.diags(1.0 / np.sqrt(safe_d))
+                L_norm = d_inv_sqrt @ L @ d_inv_sqrt
+                
+                # k=6 to safely grab lambda 2 and lambda 3
+                eigs = spla.eigsh(
+                    L_norm, k=6, which="SM", 
+                    return_eigenvectors=False, tol=1e-5, maxiter=3000
+                )
+                eigs_sorted = sorted(np.real(eigs))
+                fiedler_val = max(0.0, float(eigs_sorted[1])) if len(eigs_sorted) > 1 else 0.0
+                spectral_gap = float(eigs_sorted[2] - eigs_sorted[1]) if len(eigs_sorted) > 2 else 0.0
+            except Exception as e:
+                print(f"[warn] Spectral computation failed: {e}")
+                
+    except Exception as e:
+        print(f"[error] Laplacian reconstruction failed: {e}")
 
+    # 6. Dimension Reduction for Visualization
     try:
-        lambdas     = engine.aspace.lambdas()
-        fiedler_val = float(sorted(lambdas)[1]) if len(lambdas) > 1 else 0.0
+        pca = PCA(n_components=2)
+        coords = pca.fit_transform(engine.embs).tolist()
+        explained_variance = pca.explained_variance_ratio_.tolist()
     except Exception:
-        fiedler_val = 0.0
-
-    pca    = PCA(n_components=2)
-    coords = pca.fit_transform(engine.embs).tolist()
+        coords = []
+        explained_variance = []
 
     return {
-        "degree_stats": {
-            "min":  float(degrees.min()),
-            "max":  float(degrees.max()),
-            "mean": float(degrees.mean()),
-            "std":  float(degrees.std()),
+        "graph_stats": {
+            "n_nodes": n,
+            "n_edges": n_edges,
+            "sparsity": float(sparsity),
         },
-        "fiedler_value": fiedler_val,
+        "degree_stats": {
+            "min": float(degrees.min()) if n > 0 else 0.0,
+            "max": float(degrees.max()) if n > 0 else 0.0,
+            "mean": float(degrees.mean()) if n > 0 else 0.0,
+            "std": float(degrees.std()) if n > 0 else 0.0,
+            "cv": float(degree_cv),
+            "hubs": {
+                "count": hub_count,
+                "fraction": hub_fraction
+            },
+            "tails": {
+                "count": isolated_count,
+                "fraction": tail_fraction
+            }
+        },
+        "spectral_stats": {
+            "fiedler_value": float(fiedler_val),
+            "spectral_gap": float(spectral_gap)
+        },
         "pca_2d": coords,
-        "pca_explained_variance": pca.explained_variance_ratio_.tolist(),
-        "ids": engine.ids,
+        "pca_explained_variance": explained_variance,
+        "ids": engine.ids if hasattr(engine, 'ids') else [],
     }
-
-
-@router.post("/prompts/search", response_model=PromptSearchResponse)
-def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
-    engine = _get_engine()
-    q      = np.asarray(body.vector, dtype=np.float64)
-    try:
-        raw = engine.search(q, k=body.k, tau=body.tau, alpha=body.alpha, lam=body.lam)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return PromptSearchResponse(
-        query=None,
-        k=body.k,
-        tau=body.tau,
-        lam=body.lam,
-        results=[PromptSearchResult(**r) for r in raw],
-        result_count=len(raw),
-    )
-
 
 @router.post("/prompts/nl_search", response_model=PromptSearchResponse)
 def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:
