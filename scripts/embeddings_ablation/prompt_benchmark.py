@@ -1,6 +1,6 @@
 """
 prompt_benchmark_nomic768.py
-----------------------------
+
 Full metric evaluation on the PromptKaban corpus using the winning
 embedding pair: nomic-embed-text-v1.5 @ 768d.
 
@@ -229,7 +229,7 @@ def build_embeddings(texts, model_name=NOMIC_MODEL, dim=NOMIC_DIM, cache_file=No
         texts,
         convert_to_numpy=True,
         show_progress_bar=True,
-        normalize_embeddings=True,  # nomic requires L2-norm
+        normalize_embeddings=True,
     )
     # Truncate to requested matryoshka dimension
     X = X[:, :dim].astype(np.float64)
@@ -397,7 +397,6 @@ def tau_search(C, q, tau, k=RESULTS_K):
     """
     sc = _cosine_scores(C, q)
     if tau < 1.0:
-        # pre-select a wider pool to blend on
         idx, _ = _topk(sc, min(k * 4, len(C)))
         sel_C = C[idx]
         cn = sel_C / (np.linalg.norm(sel_C, axis=1, keepdims=True) + 1e-12)
