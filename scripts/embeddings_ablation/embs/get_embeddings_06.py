@@ -19,10 +19,9 @@ from pathlib import Path
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+import json
 
-from semantic_engine_demo.json_load import load_json
 
-# ── Paths ──────────────────────────────────────────────────────────────────
 ROOT      = Path(__file__).parent.parent
 DATA_DIR  = ROOT / "data"
 DATA_PATH = DATA_DIR / "dataset.json"
@@ -31,10 +30,11 @@ MODEL_NAME = "perplexity-ai/pplx-embed-v1-0.6b"
 BATCH_SIZE = 8
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# SHARED HELPERS
-# ══════════════════════════════════════════════════════════════════════════
-
+# Common helpers
+def load_json(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+    
 def _clean(text: str) -> str:
     """Strip {{placeholder}} tokens and collapse whitespace."""
     return re.sub(r"\s+", " ", re.sub(r"\{\{[^}]+\}\}", "", text)).strip()
@@ -62,9 +62,7 @@ def _is_weak_title(element: dict) -> bool:
     return title_words <= 4 or not has_signal
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# EXTRACTION VARIANTS
-# ══════════════════════════════════════════════════════════════════════════
+# Different extraction variants to test. Each takes the raw doc dict and returns a string to embed.
 
 def extract_v1(element: dict) -> str:
     """Baseline: structured fields + full raw content."""
@@ -133,7 +131,6 @@ def extract_v5(element: dict) -> str:
     return f"{header} Topics: {tags}. {clean_body[:280]}"
 
 
-# ── Variant registry ───────────────────────────────────────────────────────
 VARIANTS: dict[str, dict] = {
     "v1": {
         "fn"    : extract_v1,
@@ -158,9 +155,8 @@ VARIANTS: dict[str, dict] = {
 }
 
 
-# ══════════════════════════════════════════════════════════════════════════
+
 # BUILD
-# ══════════════════════════════════════════════════════════════════════════
 
 def build(variant: str, corpus: list[dict], model: SentenceTransformer) -> None:
     cfg       = VARIANTS[variant]
@@ -184,7 +180,7 @@ def build(variant: str, corpus: list[dict], model: SentenceTransformer) -> None:
         sentences,
         batch_size           = BATCH_SIZE,
         show_progress_bar    = True,
-        normalize_embeddings = True,   # ← required for cosine sim in ArrowSpace
+        normalize_embeddings = False,   
         convert_to_numpy     = True,
     )
 
@@ -213,17 +209,12 @@ def main(variants_to_build: list[str]) -> None:
     for v in variants_to_build:
         print(f"  {v}  →  {VARIANTS[v]['output'].name}")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--variant",
         choices = list(VARIANTS.keys()) + ["all"],
-        default = "v4",                    # ← recommended default
+        default = "v4",                   
         help    = "Extraction variant to build (default: v4)",
     )
     args = parser.parse_args()

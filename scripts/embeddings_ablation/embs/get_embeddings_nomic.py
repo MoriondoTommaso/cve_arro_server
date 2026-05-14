@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-ROOT = Path("/content/drive/MyDrive")
+ROOT = Path(__file__).parent.parent
 DATASET_PATH = ROOT / "data" / "dataset.json"
 OUTPUT_DIR   = ROOT / "data"
 
@@ -41,7 +41,7 @@ BATCH_SIZE = 256
 ALL_DIMS   = [768, 512, 256]
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# helpers
 
 def clean(text: str) -> str:
     """Remove {{placeholder}} tokens, collapse whitespace."""
@@ -56,7 +56,7 @@ def is_weak_title(el: dict) -> bool:
     return len(el["title"].split()) <= 4 or not has_signal
 
 
-# ── extraction variants ───────────────────────────────────────────────────────
+# extraction variants 
 
 def extract_compact(el: dict) -> str:
     """
@@ -127,7 +127,7 @@ VARIANTS = {
 }
 
 
-# ── encoding ──────────────────────────────────────────────────────────────────
+# encoding 
 
 def encode_corpus(model: SentenceTransformer, texts: list[str], label: str) -> np.ndarray:
     """Encode → L2-normalised float32 array of shape (n, 768)."""
@@ -137,7 +137,7 @@ def encode_corpus(model: SentenceTransformer, texts: list[str], label: str) -> n
         texts,
         batch_size=BATCH_SIZE,
         show_progress_bar=True,
-        normalize_embeddings=True,
+        normalize_embeddings=False,
         convert_to_numpy=True,
     )
     elapsed = time.perf_counter() - t0
