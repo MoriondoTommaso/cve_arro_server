@@ -9,9 +9,6 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-      args:
-        INSTALL_ARROW: "0"
-        INSTALL_ARROWSPACE: "0"
     image: arro-server:dev
     container_name: arro-server
     ports:
@@ -20,6 +17,7 @@ services:
       ARRO_SERVER_DATA_ROOTS: "main=/data"
       ARRO_SERVER_CORS_ORIGINS: "*"
       ARRO_SERVER_DEFAULT_WINDOW: "100"
+      ARRO_SERVER_SERVE_FRONTEND: "true"
     volumes:
       # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
       - "${DATA_DIR:-./example_data}:/data:ro,Z"

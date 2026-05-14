@@ -16,17 +16,10 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY frontend ./frontend
 
+# Install everything via the [full] extra (zarr, arrow, nlp, notebook, dev).
+# Using editable install so src/ changes are reflected without rebuilding.
 RUN pip install --upgrade pip \
-    && pip install ".[zarr]"
-
-# Optional: install pyarrow at build time.
-ARG INSTALL_ARROW=0
-# Optional: install arrowspace (pip install arrowspace).
-# Repo: https://github.com/tuned-org-uk/pyarrowspace
-ARG INSTALL_ARROWSPACE=0
-RUN if [ "$INSTALL_ARROW" = "1" ]; then pip install ".[arrow]"; fi \
-    && if [ "$INSTALL_ARROWSPACE" = "1" ]; then pip install ".[arrowspace]" || \
-        echo "arrowspace not installable in this image; sidecar adapter will be used"; fi
+    && pip install -e '.[full]'
 
 # Run as a non-root user for security.
 RUN adduser --disabled-password --gecos "" appuser
