@@ -1,12 +1,71 @@
+# Keep the build context small. The runtime image still pulls a handful of
+# demo-data files via explicit COPY directives in the Containerfile, but the
+# rest of the repo is stripped here.
+
+# VCS
 .git
+.github
 .gitignore
+.gitattributes
+
+# Local virtualenvs and caches
 .venv
+venv
+env
 __pycache__
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache
 .ruff_cache
+.mypy_cache
+.pytype
+.coverage
+htmlcov
+.tox
+.nox
+
+# Build / dist artefacts
 build
 dist
 *.egg-info
-tests
+*.egg
+wheels
+share/python-wheels
+
+# Editor / OS metadata
+.DS_Store
+**/.DS_Store
+.idea
+.vscode
+
+# Local env files (secrets)
+.env
+.env.local
+.envrc
+
+# Test data — re-generated on demand via scripts/make_example_data.py
 example_data
+
+# Bulky generated artefacts not needed at runtime
+output_prompt_nomic768
+notebooks/iframe_figures
+notebooks/embeddings_val
+notebooks/demos
+notebooks/lambda_distribution.html
+notebooks/search_engine_demo.ipynb
+notebooks/arrowspace_tuning.db
+scripts/embeddings_ablation
+
+# Runtime-generated ArrowSpace stores (re-created in container at /app)
+arrowspace_index
+_arrowspace_index
+
+# Misc reports / images dropped in the repo root by ad-hoc runs
+*.log
+backrev.md
+paste*.txt
+Screenshot*.jpg
+Screenshot*.png
+coding_session_*.jsonl
+leaf_*report.md
