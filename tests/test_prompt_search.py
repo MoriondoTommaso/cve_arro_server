@@ -235,3 +235,137 @@ class TestPromptVectorSearch:
     def test_missing_vector_422(self, client: TestClient):
         r = client.post("/api/prompts/search", json={"k": 5})
         assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Salience plumbing — routes accept and propagate to PromptSearchEngine.search()
+# ---------------------------------------------------------------------------
+
+class TestSaliencePlumbing:
+    """Verify salience is plumbed end-to-end from request to engine.search()."""
+
+    def test_nl_search_passes_salience_to_engine(self, client: TestClient, stub_app):
+        from arro_server.api import routes as routes_mod
+        engine = routes_mod.PromptSearchEngine.get()
+        engine.search.reset_mock()
+        client.post(
+            "/api/prompts/nl_search",
+            json={"query": FAKE_QUERY, "k": 3, "salience": 0.85},
+        )
+        kwargs = engine.search.call_args.kwargs
+        assert kwargs["salience"] == 0.85
+
+    def test_vector_search_passes_salience_to_engine(self, client: TestClient, stub_app):
+        from arro_server.api import routes as routes_mod
+        engine = routes_mod.PromptSearchEngine.get()
+        engine.search.reset_mock()
+        client.post(
+            "/api/prompts/search",
+            json={"vector": list(np.random.rand(FAKE_DIM).astype(float)),
+                  "k": 3, "salience": 0.42},
+        )
+        kwargs = engine.search.call_args.kwargs
+        assert kwargs["salience"] == 0.42
+
+    def test_salience_default_is_used_when_omitted(self, client: TestClient, stub_app):
+        from arro_server.api import routes as routes_mod
+        engine = routes_mod.PromptSearchEngine.get()
+        engine.search.reset_mock()
+        client.post("/api/prompts/nl_search", json={"query": FAKE_QUERY, "k": 3})
+        kwargs = engine.search.call_args.kwargs
+        # NLSearchRequest default is 0.3
+        assert kwargs["salience"] == pytest.approx(0.3)
+
+    def test_salience_out_of_range_422(self, client: TestClient):
+        r = client.post(
+            "/api/prompts/nl_search",
+            json={"query": FAKE_QUERY, "salience": 1.5},
+        )
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Salience computation — engine produces varied scores when metadata varies
+# ---------------------------------------------------------------------------
+
+class TestSalienceComputation:
+    """Direct tests against PromptSearchEngine internals (no API).
+
+    These tests do not load embeddings or build an ArrowSpace index; they
+    construct an engine instance manually and exercise _compute_salience to
+    confirm that varying engagement metadata produces varied salience scores
+    (i.e. the salience slider has signal to act on).
+    """
+
+    def _make_engine_with(self, dataset: list[dict]):
+        from arro_server.search_engine import PromptSearchEngine
+        engine = PromptSearchEngine.__new__(PromptSearchEngine)
+        engine.ids     = [item["id"] for item in dataset]
+        engine.dataset = dataset
+        engine._meta   = {item["id"]: item for item in dataset}
+        return engine
+
+    def test_varying_metadata_produces_varying_salience(self):
+        dataset = [
+            {"id": "a", "upvotes":   0, "likes":   0, "views":      0, "author_reputation":  0.0},
+            {"id": "b", "upvotes":  50, "likes": 100, "views":   1000, "author_reputation": 10.0},
+            {"id": "c", "upvotes": 500, "likes": 900, "views":  50000, "author_reputation": 99.0},
+        ]
+        engine = self._make_engine_with(dataset)
+        scores = engine._compute_salience([0, 1, 2])
+        assert scores[0] != scores[1]
+        assert scores[1] != scores[2]
+        # Highest engagement → highest salience.
+        assert scores.argmax() == 2
+
+    def test_uniform_metadata_produces_uniform_salience(self):
+        dataset = [
+            {"id": "a", "upvotes": 5, "likes": 5, "views": 100, "author_reputation": 1.0},
+            {"id": "b", "upvotes": 5, "likes": 5, "views": 100, "author_reputation": 1.0},
+        ]
+        engine = self._make_engine_with(dataset)
+        scores = engine._compute_salience([0, 1])
+        # Both fields tie → _norm returns zeros → salience is zero everywhere.
+        assert float(scores[0]) == float(scores[1])
+
+    def test_synthesised_engagement_is_deterministic_and_varied(self):
+        from arro_server.search_engine import _synthesise_engagement
+        a = _synthesise_engagement("pk_00001")
+        b = _synthesise_engagement("pk_00001")
+        c = _synthesise_engagement("pk_00002")
+        assert a == b              # deterministic
+        assert a != c              # varies with id
+
+    def test_db_json_fallback_yields_varying_salience(self, tmp_path):
+        """End-to-end fallback path: when only id + doc_string is available,
+        synthetic engagement metadata still drives a non-degenerate salience
+        signal.  This is the path the Docker container uses.
+        """
+        from arro_server.search_engine import _load_dataset
+        repo_root = tmp_path
+        (repo_root / "notebooks").mkdir()
+        # Minimal tinydb-style dump with only id + doc_string (the bundled shape).
+        (repo_root / "notebooks" / "db.json").write_text(json.dumps({
+            "_default": {
+                "1": {"id": "pk_00001", "doc_string": "alpha"},
+                "2": {"id": "pk_00002", "doc_string": "beta"},
+                "3": {"id": "pk_00003", "doc_string": "gamma"},
+            }
+        }))
+        data_dir = repo_root / "data"
+        data_dir.mkdir()
+        records = _load_dataset(data_dir, ["pk_00001", "pk_00002", "pk_00003"])
+        assert len(records) == 3
+        # Synthetic engagement should differ across ids.
+        upvotes = {r["id"]: r["upvotes"] for r in records}
+        assert len(set(upvotes.values())) > 1
+
+        engine_dataset = records
+        from arro_server.search_engine import PromptSearchEngine
+        engine = PromptSearchEngine.__new__(PromptSearchEngine)
+        engine.ids     = [r["id"] for r in engine_dataset]
+        engine.dataset = engine_dataset
+        engine._meta   = {r["id"]: r for r in engine_dataset}
+        scores = engine._compute_salience([0, 1, 2])
+        # Varied synthetic metadata → varied salience (not all equal).
+        assert not np.allclose(scores, scores[0])
