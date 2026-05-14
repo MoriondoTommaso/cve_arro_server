@@ -198,4 +198,5 @@ _arrowspace_index/
 
 # Notebooks
 notebooks/db.json
-backrev.md*.npy
+backrev.md
+*.npy
