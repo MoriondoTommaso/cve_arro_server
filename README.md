@@ -263,32 +263,66 @@ the package is not installed.
 
 ## Containers
 
+The image bundles the demo prompt corpus (`embeddings_nomic_structured_768d_raw.zarr`
++ `notebooks/db.json`), so it boots a working `/api/prompts/*` demo with no
+volume mounts.
+
 ```bash
-# Build
-podman build -t arro-server -f Containerfile .
-# or
+# Build (multi-stage: ~3 GB final image — most of it is torch CPU + transformers)
 docker build -t arro-server -f Containerfile .
 
-# Run — mount Zarr data + prompt dataset
-podman run --rm -p 8000:8000 \
-  -v "$(pwd)/example_data:/data:ro,Z" \
-  -v "$(pwd)/data/prompt_dataset:/prompts:ro,Z" \
-  -e ARRO_SERVER_DATA_ROOTS="main=/data" \
-  -e ARRO_SERVER_PROMPT_DATA_DIR="/prompts" \
-  arro-server
+# Run — the demo data is already inside the image
+docker run --rm -p 8000:8000 arro-server
 ```
 
-Compose:
+Then open:
+
+| URL | Purpose |
+|-----|---------|
+| http://localhost:8000/ui   | LEAF Kaban frontend (search + audit) |
+| http://localhost:8000/docs | Swagger UI |
+| http://localhost:8000/api/health | Liveness / readiness |
+| http://localhost:8000/api/prompts/audit | Spectral audit payload |
+
+### Compose
 
 ```bash
+docker compose up --build
+# or, to expose your own Zarr root at /api/datasets/main/...:
 DATA_DIR=$(pwd)/example_data docker compose up --build
 ```
 
-To bake in `nlp` extras (sentence-transformers + torch):
+### Skip the NLP stack
+
+The torch + sentence-transformers wheels are large (~1 GB). If you only need
+the dataset and audit endpoints (no `nl_search`), build with:
 
 ```bash
-podman build --build-arg INSTALL_NLP=1 -t arro-server -f Containerfile .
+docker build --build-arg INSTALL_NLP=0 -t arro-server -f Containerfile .
+# or
+INSTALL_NLP=0 docker compose up --build
 ```
+
+In this mode `/api/prompts/nl_search` returns 503 but `/search`, `/audit`,
+and all `/api/datasets/*` routes still work.
+
+### First-run model download
+
+The first call to `/api/prompts/nl_search` downloads the embedder model
+(`nomic-ai/nomic-embed-text-v1.5`, ~250 MB) from HuggingFace. The compose
+file persists this download in the `arro-hf-cache` named volume so subsequent
+container restarts are warm. With plain `docker run` use
+`-v arro-hf-cache:/app/.cache/huggingface` to keep the same behaviour.
+
+### Useful environment variables
+
+| Variable | Default in container | Purpose |
+|----------|---------------------|---------|
+| `ARRO_SERVER_PROMPT_DATA_DIR` | `/app/data` | Where the engine looks for `nomic_embs/*.npy`. Falls back to the bundled Zarr in the image. |
+| `ARRO_SERVER_DATA_ROOTS` | `main=/data` (compose) | Comma-separated Zarr roots for `/api/datasets/*`. |
+| `ARRO_SERVER_CORS_ORIGINS` | `*` | Restrict to your frontend origin in production. |
+| `ARRO_SERVER_SERVE_FRONTEND` | `true` | Mount the bundled `frontend/` at `/ui`. |
+| `ARRO_SERVER_PORT` | `8000` | Container-internal port; remap on the host with `-p`. |
 
 ---
 

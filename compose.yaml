@@ -1,24 +1,49 @@
 # Works with both `docker compose` and `podman-compose`.
-# Override DATA_DIR on the host to expose your Zarr roots.
 #
-# WARNING: ARRO_SERVER_CORS_ORIGINS is set to "*" here for local development
-# convenience. Do NOT use "*" in production — set it to your actual origin(s).
+# The container bundles the demo prompt corpus (embeddings_nomic_structured_768d_raw.zarr
+# + notebooks/db.json), so no host volume is required for /api/prompts/*.
+#
+# To expose additional Zarr roots for /api/datasets/*, set DATA_DIR on the
+# host before `up`:
+#     DATA_DIR=$(pwd)/example_data docker compose up --build
+#
+# On first NL search the embedder model (nomic-embed-text-v1.5, ~250MB) is
+# downloaded from HuggingFace into a named volume so subsequent runs are warm.
+#
+# WARNING: ARRO_SERVER_CORS_ORIGINS is set to "*" here for local development.
+# Do NOT use "*" in production — set it to your actual origin(s).
 
 services:
   arro-server:
     build:
       context: .
       dockerfile: Containerfile
+      args:
+        # Set INSTALL_NLP=0 to skip the sentence-transformers + torch stack.
+        # /api/prompts/nl_search returns 503 in that mode, but /search,
+        # /audit, and the dataset routes still work.
+        INSTALL_NLP: "${INSTALL_NLP:-1}"
     image: arro-server:dev
     container_name: arro-server
     ports:
-      - "8000:8000"
+      - "${HOST_PORT:-8000}:8000"
     environment:
-      ARRO_SERVER_DATA_ROOTS: "main=/data"
-      ARRO_SERVER_CORS_ORIGINS: "*"
+      # Optional extra Zarr root for /api/datasets/* (empty by default).
+      ARRO_SERVER_DATA_ROOTS: "${ARRO_SERVER_DATA_ROOTS:-main=/data}"
+      ARRO_SERVER_CORS_ORIGINS: "${ARRO_SERVER_CORS_ORIGINS:-*}"
       ARRO_SERVER_DEFAULT_WINDOW: "100"
       ARRO_SERVER_SERVE_FRONTEND: "true"
+      # Prompt corpus lives at /app/data; engine transparently falls back to
+      # the bundled Zarr at /app/embeddings_nomic_structured_768d_raw.zarr.
+      ARRO_SERVER_PROMPT_DATA_DIR: "/app/data"
     volumes:
-      # Override on the CLI: DATA_DIR=/path/to/zarr docker compose up
-      - "${DATA_DIR:-./example_data}:/data:ro,Z"
+      # Optional extra Zarr root. Defaults to an empty named volume so the
+      # bind never fails when the host path is absent.
+      - "${DATA_DIR:-arro-empty-data}:/data:ro"
+      # Persist downloaded HuggingFace model weights across rebuilds.
+      - "arro-hf-cache:/app/.cache/huggingface"
     restart: unless-stopped
+
+volumes:
+  arro-empty-data:
+  arro-hf-cache:
