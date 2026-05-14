@@ -2,7 +2,7 @@
 from sentence_transformers import SentenceTransformer
 from pathlib import Path
 import numpy as np
-from semantic_engine_demo.json_load import load_json
+import json
 
 # Setup paths
 ROOT = Path(__file__).parent.parent
