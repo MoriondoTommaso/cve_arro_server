@@ -1,0 +1,121 @@
+query_id,query_text,tau_method,traditional_recall,semantic_recall,tolerant_recall,n_semantic_neighbors,tolerance_pct_used,tolerant_minus_traditional
+1,"I'm having trouble getting my team to adopt the new CRM software, looking for change management tips.",Cosine,1.000000,1.000000,1.000000,7,1.9382,0.000000
+1,"I'm having trouble getting my team to adopt the new CRM software, looking for change management tips.",Hybrid,1.000000,1.000000,1.000000,7,1.9382,0.000000
+1,"I'm having trouble getting my team to adopt the new CRM software, looking for change management tips.",Taumode,1.000000,1.000000,1.000000,7,1.9382,0.000000
+2,What's the best way to gently tell a client their budget is completely unrealistic?,Cosine,1.000000,1.000000,1.000000,7,2.0003,0.000000
+2,What's the best way to gently tell a client their budget is completely unrealistic?,Hybrid,1.000000,1.000000,1.000000,7,2.0003,0.000000
+2,What's the best way to gently tell a client their budget is completely unrealistic?,Taumode,1.000000,1.000000,1.000000,7,2.0003,0.000000
+3,Our churn rate spiked last month and I need a framework to investigate why.,Cosine,1.000000,1.000000,1.000000,7,2.2349,0.000000
+3,Our churn rate spiked last month and I need a framework to investigate why.,Hybrid,1.000000,1.000000,1.000000,7,2.2349,0.000000
+3,Our churn rate spiked last month and I need a framework to investigate why.,Taumode,1.000000,1.000000,1.000000,7,2.2349,0.000000
+4,Looking for ways to improve employee retention without just throwing money at the problem.,Cosine,1.000000,1.000000,1.000000,7,2.4548,0.000000
+4,Looking for ways to improve employee retention without just throwing money at the problem.,Hybrid,1.000000,1.000000,1.000000,7,2.4548,0.000000
+4,Looking for ways to improve employee retention without just throwing money at the problem.,Taumode,1.000000,1.000000,1.000000,7,2.4548,0.000000
+5,I need help mediating a conflict between two senior engineers who strongly disagree on the system architecture.,Cosine,1.000000,1.000000,1.000000,7,2.1614,0.000000
+5,I need help mediating a conflict between two senior engineers who strongly disagree on the system architecture.,Hybrid,1.000000,1.000000,1.000000,7,2.1614,0.000000
+5,I need help mediating a conflict between two senior engineers who strongly disagree on the system architecture.,Taumode,1.000000,1.000000,1.000000,7,2.1614,0.000000
+6,"How can I pitch a high-risk, high-reward marketing campaign to a conservative board of directors?",Cosine,1.000000,1.000000,1.000000,8,0.7525,0.000000
+6,"How can I pitch a high-risk, high-reward marketing campaign to a conservative board of directors?",Hybrid,1.000000,1.000000,1.000000,8,0.7525,0.000000
+6,"How can I pitch a high-risk, high-reward marketing campaign to a conservative board of directors?",Taumode,1.000000,1.000000,1.000000,8,0.7525,0.000000
+7,"My startup is running out of runway, what are the immediate steps I should take?",Cosine,1.000000,1.000000,1.000000,7,1.2708,0.000000
+7,"My startup is running out of runway, what are the immediate steps I should take?",Hybrid,1.000000,1.000000,1.000000,7,1.2708,0.000000
+7,"My startup is running out of runway, what are the immediate steps I should take?",Taumode,1.000000,1.000000,1.000000,7,1.2708,0.000000
+8,"I want to transition from a technical contributor to an engineering manager, what skills am I missing?",Cosine,1.000000,1.000000,1.000000,7,1.6679,0.000000
+8,"I want to transition from a technical contributor to an engineering manager, what skills am I missing?",Hybrid,1.000000,1.000000,1.000000,7,1.6679,0.000000
+8,"I want to transition from a technical contributor to an engineering manager, what skills am I missing?",Taumode,1.000000,1.000000,1.000000,7,1.6679,0.000000
+9,We need to re-engage dormant users who haven't logged in for over six months.,Cosine,1.000000,1.000000,1.000000,7,1.4852,0.000000
+9,We need to re-engage dormant users who haven't logged in for over six months.,Hybrid,1.000000,1.000000,1.000000,7,1.4852,0.000000
+9,We need to re-engage dormant users who haven't logged in for over six months.,Taumode,1.000000,1.000000,1.000000,7,1.4852,0.000000
+10,Help me figure out why our recent product launch didn't generate the buzz we expected.,Cosine,1.000000,1.000000,1.000000,7,1.2160,0.000000
+10,Help me figure out why our recent product launch didn't generate the buzz we expected.,Hybrid,1.000000,1.000000,1.000000,7,1.2160,0.000000
+10,Help me figure out why our recent product launch didn't generate the buzz we expected.,Taumode,1.000000,1.000000,1.000000,7,1.2160,0.000000
+11,Is it legal for my landlord to keep my deposit for normal wear and tear in New York?,Cosine,1.000000,1.000000,1.000000,7,2.7292,0.000000
+11,Is it legal for my landlord to keep my deposit for normal wear and tear in New York?,Hybrid,1.000000,1.000000,1.000000,7,2.7292,0.000000
+11,Is it legal for my landlord to keep my deposit for normal wear and tear in New York?,Taumode,1.000000,1.000000,1.000000,7,2.7292,0.000000
+12,"My React app is super laggy on mobile, what am I doing wrong?",Cosine,1.000000,1.000000,1.000000,7,2.0987,0.000000
+12,"My React app is super laggy on mobile, what am I doing wrong?",Hybrid,1.000000,1.000000,1.000000,7,2.0987,0.000000
+12,"My React app is super laggy on mobile, what am I doing wrong?",Taumode,1.000000,1.000000,1.000000,7,2.0987,0.000000
+13,Can someone explain Docker to me like I'm 5?,Cosine,1.000000,1.000000,1.000000,7,3.2832,0.000000
+13,Can someone explain Docker to me like I'm 5?,Hybrid,1.000000,1.000000,1.000000,7,3.2832,0.000000
+13,Can someone explain Docker to me like I'm 5?,Taumode,1.000000,1.000000,1.000000,7,3.2832,0.000000
+14,"I totally bombed my interview, how do I write a follow-up email that doesn't sound desperate?",Cosine,1.000000,1.000000,1.000000,7,1.1460,0.000000
+14,"I totally bombed my interview, how do I write a follow-up email that doesn't sound desperate?",Hybrid,1.000000,1.000000,1.000000,7,1.1460,0.000000
+14,"I totally bombed my interview, how do I write a follow-up email that doesn't sound desperate?",Taumode,1.000000,1.000000,1.000000,7,1.1460,0.000000
+15,Why does my Wi-Fi keep dropping only when I'm on Zoom calls?,Cosine,1.000000,1.000000,1.000000,7,1.1755,0.000000
+15,Why does my Wi-Fi keep dropping only when I'm on Zoom calls?,Hybrid,1.000000,1.000000,1.000000,7,1.1755,0.000000
+15,Why does my Wi-Fi keep dropping only when I'm on Zoom calls?,Taumode,1.000000,1.000000,1.000000,7,1.1755,0.000000
+16,Is there a quick way to clean up this messy Excel file without doing it manually?,Cosine,1.000000,1.000000,1.000000,7,2.2688,0.000000
+16,Is there a quick way to clean up this messy Excel file without doing it manually?,Hybrid,1.000000,1.000000,1.000000,7,2.2688,0.000000
+16,Is there a quick way to clean up this messy Excel file without doing it manually?,Taumode,1.000000,1.000000,1.000000,7,2.2688,0.000000
+17,What happens if I accidentally put regular gas in a premium car?,Cosine,1.000000,1.000000,1.000000,7,2.0896,0.000000
+17,What happens if I accidentally put regular gas in a premium car?,Hybrid,1.000000,1.000000,1.000000,7,2.0896,0.000000
+17,What happens if I accidentally put regular gas in a premium car?,Taumode,1.000000,1.000000,1.000000,7,2.0896,0.000000
+18,"I think my coworker is stealing my ideas, how do I bring this up to HR?",Cosine,1.000000,1.000000,1.000000,7,1.3680,0.000000
+18,"I think my coworker is stealing my ideas, how do I bring this up to HR?",Hybrid,1.000000,1.000000,1.000000,7,1.3680,0.000000
+18,"I think my coworker is stealing my ideas, how do I bring this up to HR?",Taumode,1.000000,1.000000,1.000000,7,1.3680,0.000000
+19,How do I fix a leaky faucet in my kitchen without calling a plumber?,Cosine,1.000000,1.000000,1.000000,7,1.1601,0.000000
+19,How do I fix a leaky faucet in my kitchen without calling a plumber?,Hybrid,1.000000,1.000000,1.000000,7,1.1601,0.000000
+19,How do I fix a leaky faucet in my kitchen without calling a plumber?,Taumode,1.000000,1.000000,1.000000,7,1.1601,0.000000
+20,"My dog keeps eating grass and throwing up, should I be worried?",Cosine,1.000000,1.000000,1.000000,7,1.4504,0.000000
+20,"My dog keeps eating grass and throwing up, should I be worried?",Hybrid,1.000000,1.000000,1.000000,7,1.4504,0.000000
+20,"My dog keeps eating grass and throwing up, should I be worried?",Taumode,1.000000,1.000000,1.000000,7,1.4504,0.000000
+21,Configuring BGP routing policies for multi-homed AS with unequal bandwidth links.,Cosine,1.000000,1.000000,1.000000,7,1.1261,0.000000
+21,Configuring BGP routing policies for multi-homed AS with unequal bandwidth links.,Hybrid,1.000000,1.000000,1.000000,7,1.1261,0.000000
+21,Configuring BGP routing policies for multi-homed AS with unequal bandwidth links.,Taumode,1.000000,1.000000,1.000000,7,1.1261,0.000000
+22,Optimizing garbage collection pauses in Java 17 using ZGC for low-latency trading applications.,Cosine,1.000000,1.000000,1.000000,7,0.5437,0.000000
+22,Optimizing garbage collection pauses in Java 17 using ZGC for low-latency trading applications.,Hybrid,1.000000,1.000000,1.000000,7,0.5437,0.000000
+22,Optimizing garbage collection pauses in Java 17 using ZGC for low-latency trading applications.,Taumode,1.000000,1.000000,1.000000,7,0.5437,0.000000
+23,Implementing a custom loss function in PyTorch for highly imbalanced multi-class image segmentation.,Cosine,1.000000,1.000000,1.000000,7,2.6605,0.000000
+23,Implementing a custom loss function in PyTorch for highly imbalanced multi-class image segmentation.,Hybrid,1.000000,1.000000,1.000000,7,2.6605,0.000000
+23,Implementing a custom loss function in PyTorch for highly imbalanced multi-class image segmentation.,Taumode,1.000000,1.000000,1.000000,7,2.6605,0.000000
+24,Troubleshooting 502 Bad Gateway errors in Kubernetes NGINX Ingress Controller behind an AWS ALB.,Cosine,1.000000,1.000000,1.000000,7,1.1420,0.000000
+24,Troubleshooting 502 Bad Gateway errors in Kubernetes NGINX Ingress Controller behind an AWS ALB.,Hybrid,1.000000,1.000000,1.000000,7,1.1420,0.000000
+24,Troubleshooting 502 Bad Gateway errors in Kubernetes NGINX Ingress Controller behind an AWS ALB.,Taumode,1.000000,1.000000,1.000000,7,1.1420,0.000000
+25,Calculating the aerodynamic drag coefficient using OpenFOAM for a simplified Formula SAE car.,Cosine,1.000000,1.000000,1.000000,7,1.3406,0.000000
+25,Calculating the aerodynamic drag coefficient using OpenFOAM for a simplified Formula SAE car.,Hybrid,1.000000,1.000000,1.000000,7,1.3406,0.000000
+25,Calculating the aerodynamic drag coefficient using OpenFOAM for a simplified Formula SAE car.,Taumode,1.000000,1.000000,1.000000,7,1.3406,0.000000
+26,Resolving dependency conflicts between React 18 concurrent mode and legacy Redux middleware.,Cosine,1.000000,1.000000,1.000000,7,2.0329,0.000000
+26,Resolving dependency conflicts between React 18 concurrent mode and legacy Redux middleware.,Hybrid,1.000000,1.000000,1.000000,7,2.0329,0.000000
+26,Resolving dependency conflicts between React 18 concurrent mode and legacy Redux middleware.,Taumode,1.000000,1.000000,1.000000,7,2.0329,0.000000
+27,Using WebGL shaders to implement physically based rendering (PBR) materials.,Cosine,1.000000,1.000000,1.000000,7,0.8920,0.000000
+27,Using WebGL shaders to implement physically based rendering (PBR) materials.,Hybrid,1.000000,1.000000,1.000000,7,0.8920,0.000000
+27,Using WebGL shaders to implement physically based rendering (PBR) materials.,Taumode,1.000000,1.000000,1.000000,7,0.8920,0.000000
+28,Designing a microstrip patch antenna for 2.4 GHz using HFSS.,Cosine,1.000000,1.000000,1.000000,7,1.0134,0.000000
+28,Designing a microstrip patch antenna for 2.4 GHz using HFSS.,Hybrid,1.000000,1.000000,1.000000,7,1.0134,0.000000
+28,Designing a microstrip patch antenna for 2.4 GHz using HFSS.,Taumode,1.000000,1.000000,1.000000,7,1.0134,0.000000
+29,Mitigating SSRF vulnerabilities in a Node.js microservice handling user-provided webhooks.,Cosine,1.000000,1.000000,1.000000,7,1.9473,0.000000
+29,Mitigating SSRF vulnerabilities in a Node.js microservice handling user-provided webhooks.,Hybrid,1.000000,1.000000,1.000000,7,1.9473,0.000000
+29,Mitigating SSRF vulnerabilities in a Node.js microservice handling user-provided webhooks.,Taumode,1.000000,1.000000,1.000000,7,1.9473,0.000000
+30,Configuring a reverse proxy to handle WebSocket connections with mutual TLS authentication.,Cosine,1.000000,1.000000,1.000000,7,2.2670,0.000000
+30,Configuring a reverse proxy to handle WebSocket connections with mutual TLS authentication.,Hybrid,1.000000,1.000000,1.000000,7,2.2670,0.000000
+30,Configuring a reverse proxy to handle WebSocket connections with mutual TLS authentication.,Taumode,1.000000,1.000000,1.000000,7,2.2670,0.000000
+31,Write a python script to scrape product titles and prices from a Shopify store.,Cosine,1.000000,1.000000,1.000000,7,0.6485,0.000000
+31,Write a python script to scrape product titles and prices from a Shopify store.,Hybrid,1.000000,1.000000,1.000000,7,0.6485,0.000000
+31,Write a python script to scrape product titles and prices from a Shopify store.,Taumode,1.000000,1.000000,1.000000,7,0.6485,0.000000
+32,Draft a cold outreach LinkedIn message for a SaaS product targeting HR directors.,Cosine,1.000000,1.000000,1.000000,7,0.9314,0.000000
+32,Draft a cold outreach LinkedIn message for a SaaS product targeting HR directors.,Hybrid,1.000000,1.000000,1.000000,7,0.9314,0.000000
+32,Draft a cold outreach LinkedIn message for a SaaS product targeting HR directors.,Taumode,1.000000,1.000000,1.000000,7,0.9314,0.000000
+33,Generate a 30-day social media content calendar for a local coffee shop.,Cosine,1.000000,1.000000,1.000000,7,4.0538,0.000000
+33,Generate a 30-day social media content calendar for a local coffee shop.,Hybrid,1.000000,1.000000,1.000000,7,4.0538,0.000000
+33,Generate a 30-day social media content calendar for a local coffee shop.,Taumode,1.000000,1.000000,1.000000,7,4.0538,0.000000
+34,Create a standard operating procedure (SOP) for onboarding new freelance writers.,Cosine,1.000000,1.000000,1.000000,7,1.3176,0.000000
+34,Create a standard operating procedure (SOP) for onboarding new freelance writers.,Hybrid,1.000000,1.000000,1.000000,7,1.3176,0.000000
+34,Create a standard operating procedure (SOP) for onboarding new freelance writers.,Taumode,1.000000,1.000000,1.000000,7,1.3176,0.000000
+35,Write a comprehensive prompt to get an AI to act as a rigorous technical interviewer.,Cosine,1.000000,1.000000,1.000000,7,0.9681,0.000000
+35,Write a comprehensive prompt to get an AI to act as a rigorous technical interviewer.,Hybrid,1.000000,1.000000,1.000000,7,0.9681,0.000000
+35,Write a comprehensive prompt to get an AI to act as a rigorous technical interviewer.,Taumode,1.000000,1.000000,1.000000,7,0.9681,0.000000
+36,Develop a workout plan for a beginner training for a 5k with bad knees.,Cosine,1.000000,1.000000,1.000000,7,1.2596,0.000000
+36,Develop a workout plan for a beginner training for a 5k with bad knees.,Hybrid,1.000000,1.000000,1.000000,7,1.2596,0.000000
+36,Develop a workout plan for a beginner training for a 5k with bad knees.,Taumode,1.000000,1.000000,1.000000,7,1.2596,0.000000
+37,Outline a five-slide pitch deck for a pre-seed AI health-tech startup.,Cosine,1.000000,1.000000,1.000000,7,2.5902,0.000000
+37,Outline a five-slide pitch deck for a pre-seed AI health-tech startup.,Hybrid,1.000000,1.000000,1.000000,7,2.5902,0.000000
+37,Outline a five-slide pitch deck for a pre-seed AI health-tech startup.,Taumode,1.000000,1.000000,1.000000,7,2.5902,0.000000
+38,Write a bash script that backs up a PostgreSQL database and uploads it to an S3 bucket daily.,Cosine,1.000000,1.000000,1.000000,7,1.9395,0.000000
+38,Write a bash script that backs up a PostgreSQL database and uploads it to an S3 bucket daily.,Hybrid,1.000000,1.000000,1.000000,7,1.9395,0.000000
+38,Write a bash script that backs up a PostgreSQL database and uploads it to an S3 bucket daily.,Taumode,1.000000,1.000000,1.000000,7,1.9395,0.000000
+39,Create a template for a weekly one-on-one meeting agenda between a manager and a direct report.,Cosine,1.000000,1.000000,1.000000,7,2.8945,0.000000
+39,Create a template for a weekly one-on-one meeting agenda between a manager and a direct report.,Hybrid,1.000000,1.000000,1.000000,7,2.8945,0.000000
+39,Create a template for a weekly one-on-one meeting agenda between a manager and a direct report.,Taumode,1.000000,1.000000,1.000000,7,2.8945,0.000000
+40,Generate a list of 20 creative name ideas for a plant-based dog food brand.,Cosine,1.000000,1.000000,1.000000,7,1.4995,0.000000
+40,Generate a list of 20 creative name ideas for a plant-based dog food brand.,Hybrid,1.000000,1.000000,1.000000,7,1.4995,0.000000
+40,Generate a list of 20 creative name ideas for a plant-based dog food brand.,Taumode,1.000000,1.000000,1.000000,7,1.4995,0.000000

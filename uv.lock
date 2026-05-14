@@ -246,6 +246,7 @@ full = [
     { name = "zarr" },
 ]
 nlp = [
+    { name = "einops" },
     { name = "sentence-transformers" },
     { name = "torch" },
     { name = "torchaudio" },
@@ -272,6 +273,7 @@ requires-dist = [
     { name = "arro-server", extras = ["zarr", "arrow", "nlp", "notebook", "dev"], marker = "extra == 'full'" },
     { name = "arrowspace", specifier = ">=0.26.2" },
     { name = "arrowspace-tuner", specifier = ">=0.3.1" },
+    { name = "einops", marker = "extra == 'nlp'", specifier = ">=0.7" },
     { name = "einops", marker = "extra == 'notebook'", specifier = ">=0.7" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastapi", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.115" },
