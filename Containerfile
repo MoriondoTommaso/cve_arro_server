@@ -1,27 +1,23 @@
-# Podman-compatible (also a valid Dockerfile). Build with:
-#   podman build -t arro-server -f Containerfile .
-#   docker build -t arro-server -f Containerfile .
-
 FROM docker.io/library/python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
 
 WORKDIR /app
 
-# Install build prerequisites first to maximise layer reuse.
-COPY pyproject.toml README.md ./
+# Copy everything hatchling needs to build the package
+COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY frontend ./frontend
 
-# Install everything via the [full] extra (zarr, arrow, nlp, notebook, dev).
-# Using editable install so src/ changes are reflected without rebuilding.
+# Regular (non-editable) install with all extras
 RUN pip install --upgrade pip \
-    && pip install -e '.[full]'
+    && pip install '.[full]'
 
-# Run as a non-root user for security.
+# Run as a non-root user for security
 RUN adduser --disabled-password --gecos "" appuser
 USER appuser
 
