@@ -279,8 +279,9 @@ Then open:
 
 | URL | Purpose |
 |-----|---------|
-| http://localhost:8000/ui   | LEAF Kaban frontend (search + audit) |
-| http://localhost:8000/docs | Swagger UI |
+| http://localhost:8000/        | API root (JSON service banner) |
+| http://localhost:8000/ui/     | LEAF Kaban frontend (search + audit) — `/ui` also works (redirects) |
+| http://localhost:8000/docs    | Swagger UI |
 | http://localhost:8000/api/health | Liveness / readiness |
 | http://localhost:8000/api/prompts/audit | Spectral audit payload |
 
@@ -321,8 +322,10 @@ container restarts are warm. With plain `docker run` use
 | `ARRO_SERVER_PROMPT_DATA_DIR` | `/app/data` | Where the engine looks for `nomic_embs/*.npy`. Falls back to the bundled Zarr in the image. |
 | `ARRO_SERVER_DATA_ROOTS` | `main=/data` (compose) | Comma-separated Zarr roots for `/api/datasets/*`. |
 | `ARRO_SERVER_CORS_ORIGINS` | `*` | Restrict to your frontend origin in production. |
-| `ARRO_SERVER_SERVE_FRONTEND` | `true` | Mount the bundled `frontend/` at `/ui`. |
+| `ARRO_SERVER_SERVE_FRONTEND` | `true` | Mount the bundled `frontend/` at `/ui/` (also reachable as `/ui`). |
+| `ARRO_SERVER_MAX_WINDOW` | `25000` (compose) | Row cap for `/data` / `/slice` responses. Bumped above the library default (10,000) so the bundled 20,000×768 demo corpus fits a single index build. |
 | `ARRO_SERVER_PORT` | `8000` | Container-internal port; remap on the host with `-p`. |
+| `HF_HOME` | `/app/.cache/huggingface` | HuggingFace cache root (model weights). The compose file mounts a named volume here so downloads survive rebuilds. |
 
 ---
 

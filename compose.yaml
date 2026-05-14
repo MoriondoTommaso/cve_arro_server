@@ -32,10 +32,19 @@ services:
       ARRO_SERVER_DATA_ROOTS: "${ARRO_SERVER_DATA_ROOTS:-main=/data}"
       ARRO_SERVER_CORS_ORIGINS: "${ARRO_SERVER_CORS_ORIGINS:-*}"
       ARRO_SERVER_DEFAULT_WINDOW: "100"
+      # max_window caps rows per /data or /slice response. For an N-D array
+      # the element budget is max_window * product(shape[1:]); the bundled
+      # demo corpus is 20,000 rows × 768 dims = 15.36M elements, so the
+      # default of 10,000 rows (×768 = 7.68M elem budget) rejects a full
+      # index build. 25,000 leaves headroom (19.2M elem budget).
+      ARRO_SERVER_MAX_WINDOW: "${ARRO_SERVER_MAX_WINDOW:-25000}"
       ARRO_SERVER_SERVE_FRONTEND: "true"
       # Prompt corpus lives at /app/data; engine transparently falls back to
       # the bundled Zarr at /app/embeddings_nomic_structured_768d_raw.zarr.
       ARRO_SERVER_PROMPT_DATA_DIR: "/app/data"
+      # HuggingFace caches model weights here; must match the named volume
+      # mount below and the directory chowned to appuser in the Containerfile.
+      HF_HOME: "/app/.cache/huggingface"
     volumes:
       # Optional extra Zarr root. Defaults to an empty named volume so the
       # bind never fails when the host path is absent.

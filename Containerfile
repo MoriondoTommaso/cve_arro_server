@@ -113,7 +113,10 @@ COPY notebooks/results ./notebooks/results
 
 # Empty data/ — PromptSearchEngine looks for nomic_embs/*.npy here first and
 # transparently falls back to the bundled .zarr at the repo root.
-RUN mkdir -p /app/data
+# .cache/huggingface is pre-created so the named volume mounted at this path
+# inherits appuser ownership on first up; otherwise the volume would be owned
+# by root and EmbedderService would log "Permission denied" on warm-up.
+RUN mkdir -p /app/data /app/.cache/huggingface
 
 # Drop to a non-root user.
 RUN adduser --disabled-password --gecos "" appuser \
@@ -127,8 +130,8 @@ ENV ARRO_SERVER_HOST=0.0.0.0 \
     ARRO_SERVER_SERVE_FRONTEND=true \
     ARRO_SERVER_PROMPT_DATA_DIR=/app/data \
     ARRO_SERVER_INDEX_STORE=/app/arrowspace_index \
-    HF_HOME=/app/.cache/huggingface \
-    TRANSFORMERS_CACHE=/app/.cache/huggingface
+    ARRO_SERVER_MAX_WINDOW=25000 \
+    HF_HOME=/app/.cache/huggingface
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,sys; \
