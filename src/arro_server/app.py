@@ -8,6 +8,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -89,6 +90,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 except Exception:
                     pass
         if frontend_dir and frontend_dir.exists():
+            # StaticFiles mount only serves /ui/ (with trailing slash); requests
+            # to /ui (no slash) return 404. Add an explicit redirect so both work.
+            @app.get("/ui", include_in_schema=False)
+            def _ui_redirect() -> RedirectResponse:
+                return RedirectResponse(url="/ui/", status_code=307)
+
             app.mount("/ui", StaticFiles(directory=str(frontend_dir), html=True), name="ui")
 
     return app
