@@ -107,9 +107,7 @@ COPY --from=builder /opt/venv /opt/venv
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY frontend ./frontend
-COPY embeddings_nomic_structured_768d_raw.zarr ./embeddings_nomic_structured_768d_raw.zarr
-COPY notebooks/db.json ./notebooks/db.json
-COPY notebooks/results ./notebooks/results
+COPY embeddings_nomic_structured_768d_raw.zarr ./embeddings_nomic_structured_768d_raw.zarrß
 
 # Empty data/ — PromptSearchEngine looks for nomic_embs/*.npy here first and
 # transparently falls back to the bundled .zarr at the repo root.
