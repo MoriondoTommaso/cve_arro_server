@@ -45,6 +45,26 @@ def _norm(arr: np.ndarray) -> np.ndarray:
     return (arr - mn) / (mx - mn)
 
 
+def _synthesise_engagement(pid: str) -> tuple[int, int, int, float, int]:
+    """Deterministically derive (upvotes, likes, views, reputation, uses) from an id.
+
+    The bundled demo db.json carries only id + doc_string, so the metadata
+    salience term would be uniformly zero and the salience slider would have
+    no visible effect.  Mapping each id through a stable hash gives the
+    demo a varied engagement profile while keeping responses reproducible
+    across container restarts.
+    """
+    import hashlib
+
+    digest = hashlib.blake2s(pid.encode("utf-8"), digest_size=10).digest()
+    upvotes = int.from_bytes(digest[0:2], "little") % 500          # 0..499
+    likes   = int.from_bytes(digest[2:4], "little") % 1000         # 0..999
+    views   = int.from_bytes(digest[4:6], "little") % 10000        # 0..9999
+    rep     = (int.from_bytes(digest[6:8], "little") % 1000) / 10  # 0.0..99.9
+    uses    = int.from_bytes(digest[8:10], "little") % 200         # 0..199
+    return upvotes, likes, views, rep, uses
+
+
 def _load_best_params(data_dir: Path) -> dict:
     """Load graph build params from the latest tuner run.
 
@@ -182,23 +202,38 @@ def _load_dataset(data_dir: Path, ids: list[str]) -> list[dict]:
             with db_path.open() as f:
                 db = json.load(f)
             entries = db.get("_default", db)
-            # Build minimal records: id + content (from doc_string).
-            # Engagement fields default to 0; salience will be uniform 0 for these
-            # entries, which is correct (no signal beyond cosine/spectral relevance).
+            # The bundled demo db.json carries only `id` + `doc_string`.  If the
+            # engagement fields are absent we synthesize deterministic, per-id
+            # values so the salience reranker has signal in the demo container.
+            # The synthetic values are stable across processes (hash → fixed
+            # seed) so /api/prompts/* responses are reproducible.
             records: list[dict] = []
             for _, item in entries.items():
                 if "id" not in item:
                     continue
+                pid = item["id"]
+                has_engagement = any(
+                    item.get(k) is not None
+                    for k in ("upvotes", "likes", "views", "author_reputation", "uses")
+                )
+                if has_engagement:
+                    upvotes = int(item.get("upvotes") or 0)
+                    likes   = int(item.get("likes")   or 0)
+                    views   = int(item.get("views")   or 0)
+                    rep     = float(item.get("author_reputation") or 0)
+                    uses    = int(item.get("uses")    or 0)
+                else:
+                    upvotes, likes, views, rep, uses = _synthesise_engagement(pid)
                 records.append({
-                    "id":       item["id"],
+                    "id":       pid,
                     "content":  item.get("doc_string", ""),
                     "title":    item.get("title"),
                     "tags":     item.get("tags", []),
-                    "upvotes":  item.get("upvotes", 0),
-                    "likes":    item.get("likes", 0),
-                    "uses":     item.get("uses", 0),
-                    "views":    item.get("views", 0),
-                    "author_reputation": item.get("author_reputation", 0),
+                    "upvotes":  upvotes,
+                    "likes":    likes,
+                    "uses":     uses,
+                    "views":    views,
+                    "author_reputation": rep,
                 })
             log.info("Loaded dataset from db.json fallback: %d records", len(records))
             return records
