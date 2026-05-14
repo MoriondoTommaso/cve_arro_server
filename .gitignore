@@ -177,25 +177,35 @@ __marimo__/
 example_data/
 /tmp/srv.log
 
-# ── macOS metadata (never commit these) ─────────────────────────────────────
+# ── macOS metadata (NEVER commit these) ─────────────────────────────────────
+# To remove already-tracked files run:
+#   git rm --cached .DS_Store src/.DS_Store
+#   git commit -m "chore: stop tracking .DS_Store files"
 **/.DS_Store
 .DS_Store
 .AppleDouble
 .LSOverride
-# Already-tracked .DS_Store files must be removed locally:
-#   git rm --cached .DS_Store src/arro_server/.DS_Store
-#   git commit -m "chore: stop tracking .DS_Store files"
 
 # ── Project-specific generated / runtime artefacts ──────────────────────────
 # Dataset directories (large binary data — mount via volume in containers)
 data/
 
 # ArrowSpace index stores (runtime-generated graph-Laplacian indices)
-arrowspace_index/
-_arrowspace_index/
+# To remove already-tracked content run:
+#   git rm -r --cached arrowspace_index/ _arrowspace_index/
+#   git commit -m "chore: untrack committed arrowspace index data"
+arrowspace_index/*
+!arrowspace_index/.gitkeep
+_arrowspace_index/*
+!_arrowspace_index/.gitkeep
 
-# Zarr arrays committed accidentally — keep only .gitkeep placeholders
+# Zarr arrays (large binary embedding data — never commit raw arrays)
 *.zarr/
+**/*.zarr/
+
+# Script output / ablation results (regenerate with scripts/)
+output_prompt_nomic768/
+scripts/embeddings_ablation/
 
 # Notebooks
 notebooks/db.json
