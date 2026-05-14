@@ -107,7 +107,12 @@ COPY --from=builder /opt/venv /opt/venv
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY frontend ./frontend
-COPY embeddings_nomic_structured_768d_raw.zarr ./embeddings_nomic_structured_768d_raw.zarrß
+COPY embeddings_nomic_structured_768d_raw.zarr ./embeddings_nomic_structured_768d_raw.zarr
+# notebooks/db.json provides the prompt text + id alignment for the bundled
+# Zarr embeddings.  Without it, PromptSearchEngine's dataset fallback raises
+# FileNotFoundError and /api/prompts/* never starts, and salience reranking
+# has no metadata to operate on.
+COPY notebooks/db.json ./notebooks/db.json
 
 # Empty data/ — PromptSearchEngine looks for nomic_embs/*.npy here first and
 # transparently falls back to the bundled .zarr at the repo root.
