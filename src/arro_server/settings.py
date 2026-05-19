@@ -5,13 +5,11 @@
 #   - Added `prompt_data_dir` field for LEAF Kaban data volume path
 #   - Added `embedder_model` field for HuggingFace model id override
 # Modifications for CVE spectral drift demo:
-#   - Added `cve_period_a` / `cve_period_b` fields pointing at the two
-#     embedding slices used by CveDriftEngine (/api/drift/* routes)
+#   - Added `cve_period_a` / `cve_period_b` fields
 #   - Added `cve_n_sample` field controlling subsampling in the drift engine
-#   - FIX: cve_period_a/b defaults are now relative path strings resolved at
-#     access time, not absolute paths computed from __file__ at import time.
-#     The old approach broke in installed / containerised environments where
-#     __file__ points inside site-packages.
+#   - FIX: cve_period_a/b defaults are CWD-relative strings (not __file__-absolute)
+# Fix: embedder_model default changed from nomic-ai/nomic-embed-text-v1.5 (768-dim)
+#      to all-MiniLM-L6-v2 (384-dim) to match the CVE corpus embeddings.
 # See CHANGES.md for full modification record.
 from __future__ import annotations
 
@@ -39,17 +37,24 @@ class Settings(BaseSettings):
     ``ARRO_SERVER_CORS_ORIGINS=https://app.example.com,https://admin.example.com``.
     Use ``*`` (the default) to allow all origins — do not use ``*`` in production.
 
+    Embedder
+    --------
+    ``embedder_model`` selects the SentenceTransformer model used by
+    ``EmbedderService`` for natural-language search.
+    Must produce 384-dim vectors to match the CVE corpus.
+    Default: ``sentence-transformers/all-MiniLM-L6-v2``
+    Override: ``ARRO_SERVER_EMBEDDER_MODEL=<hf-model-id>``
+
     CVE drift paths
     ---------------
     ``cve_period_a`` / ``cve_period_b`` default to relative paths
     ``data/cve_embeddings_demo/embs_99_to_14.npy`` and
     ``data/cve_embeddings_demo/embs_15_to_2025.npy`` resolved against the
-    process CWD at runtime.  Override via environment variables
-    ``ARRO_SERVER_CVE_PERIOD_A`` / ``ARRO_SERVER_CVE_PERIOD_B`` (absolute or
-    relative paths).
+    process CWD at runtime.  Override via ``ARRO_SERVER_CVE_PERIOD_A`` /
+    ``ARRO_SERVER_CVE_PERIOD_B``.
 
     ``cve_n_sample`` controls how many rows are passed to ArrowSpaceBuilder.
-    Defaults to 8 000; set to 0 to disable subsampling (slow on large arrays).
+    Defaults to 8 000; set to 0 to disable subsampling.
     """
 
     model_config = SettingsConfigDict(
@@ -68,16 +73,15 @@ class Settings(BaseSettings):
     index_store: str = "./arrowspace_index"
     index_cache_size: int = 8
 
-    # ── Prompt search (LEAF Kaban) ──────────────────────────────────────────────
+    # ── Prompt / CVE search ─────────────────────────────────────────────
     prompt_data_dir: str = "./data"
-    embedder_model: str = "nomic-ai/nomic-embed-text-v1.5"
+    # FIX: was nomic-ai/nomic-embed-text-v1.5 (768-dim) — corpus is 384-dim
+    embedder_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
-    # ── CVE spectral drift (two-period demo) ────────────────────────────────────
-    # Relative to CWD so they work both locally (run from repo root) and inside
-    # Docker (WORKDIR /app with data mounted at /app/data).
+    # ── CVE spectral drift (two-period demo) ───────────────────────────────
     cve_period_a: str = "data/cve_embeddings_demo/embs_99_to_14.npy"
     cve_period_b: str = "data/cve_embeddings_demo/embs_15_to_2025.npy"
-    cve_n_sample: int = 8_000   # rows subsampled per period for the index build
+    cve_n_sample: int = 8_000
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod
@@ -88,17 +92,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_roots(self) -> dict[str, Path]:
-        """Return mapping of root label -> filesystem path.
-
-        Roots may be specified as ``path`` or ``label=path``.
-        Unlabeled roots are auto-named after their directory basename, with
-        numeric suffixes on collision.
-
-        Implemented as a plain ``@property`` (not ``cached_property``) to
-        avoid the pydantic-settings v2 incompatibility where ``cached_property``
-        descriptors are not stored in ``__dict__`` and can raise
-        ``AttributeError`` on some versions.
-        """
+        """Return mapping of root label -> filesystem path."""
         out: dict[str, Path] = {}
         for entry in self.data_roots:
             if "=" in entry:
