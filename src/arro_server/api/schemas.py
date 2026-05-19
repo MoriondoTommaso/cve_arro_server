@@ -14,6 +14,10 @@ from pydantic import AliasChoices, BaseModel, Field, model_validator
 # Keys that belong to the ArrowSpaceBuilder graph_params dict.
 _GRAPH_PARAM_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
 
+# Embedding dimension used by the active model (all-MiniLM-L6-v2 = 384).
+# If you switch models, update this constant and restart.
+_EMBED_DIM = 384
+
 
 class SearchRequest(BaseModel):
     """Body for POST /datasets/{id}/search (spectral taumode search)."""
@@ -53,7 +57,7 @@ class SearchBatchRequest(BaseModel):
 class PromptSearchRequest(BaseModel):
     """Body for POST /api/prompts/search."""
 
-    vector: list[float] = Field(..., description="768-dim nomic-embed-text-v1.5 query vector.")
+    vector: list[float] = Field(..., description=f"{_EMBED_DIM}-dim query vector.")
     k: int              = Field(10, ge=1, le=100, description="Number of results to return.")
     tau: float          = Field(0.75, ge=0.0, le=5.0, description="Spectral sharpness (0=broad, 5=sharp).")
     alpha: float        = Field(0.6, ge=0.0, le=1.0, description="Spectral-vs-cosine blend.")
@@ -62,8 +66,11 @@ class PromptSearchRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check_vector_dim(self) -> "PromptSearchRequest":
-        if len(self.vector) != 768:
-            raise ValueError(f"vector must have exactly 768 dimensions, got {len(self.vector)}")
+        if len(self.vector) != _EMBED_DIM:
+            raise ValueError(
+                f"vector must have exactly {_EMBED_DIM} dimensions, got {len(self.vector)}. "
+                f"Make sure the embedder uses all-MiniLM-L6-v2 (dim={_EMBED_DIM})."
+            )
         return self
 
 
@@ -118,9 +125,10 @@ class PromptSearchResult(BaseModel):
 
     @model_validator(mode="after")
     def _sync_body_content(self) -> "PromptSearchResult":
-        if self.content is not None and self.body is None:
+        """Ensure content and body are always both populated from whichever is set."""
+        if self.content and not self.body:
             self.body = self.content
-        elif self.body is not None and self.content is None:
+        elif self.body and not self.content:
             self.content = self.body
         return self
 

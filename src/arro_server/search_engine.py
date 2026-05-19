@@ -9,6 +9,7 @@
 #   - Zarr fallback for embedding load when .npy files are absent
 # Fix: settings.data_dir -> settings.prompt_data_dir (field was renamed
 #      in settings.py; this caused 503 on every /api/prompts/* call)
+# Fix: _load_dataset path & id normalisation so content is never empty
 from __future__ import annotations
 
 import json
@@ -57,8 +58,6 @@ def _load_best_params(data_dir: Path) -> dict:
         filtered.setdefault("topk", _DEFAULT_BUILD_PARAMS["topk"])
         log.info("Loaded ArrowSpace build params from tuner: %s", filtered)
         return filtered
-    # NOTE bug-1 fixed: was missing the closing ) on log.warning() so the
-    # return below was a SyntaxError / unreachable.
     except (FileNotFoundError, IndexError, KeyError, ValueError, json.JSONDecodeError) as exc:
         log.warning(
             "Tuner results unavailable (%s) — using hardcoded defaults: %s",
@@ -108,13 +107,9 @@ def _load_embeddings(data_dir: Path) -> tuple[np.ndarray, list[str]]:
             "zarr is required for the .zarr fallback; pip install 'zarr>=3.0'"
         ) from exc
 
-    # NOTE bug-2 fixed: original used zarr.open() which returns a Group;
-    # calling arr[:] on a Group raises TypeError. Use open_array() instead.
     arr  = _zarr.open_array(str(zarr_path), mode="r")
     embs = np.asarray(arr[:], dtype=np.float64)
 
-    # NOTE bug-3 fixed: ids were loaded from npy_ids unconditionally in the
-    # Zarr branch where npy_ids may not exist. Added existence check.
     if npy_ids.exists():
         ids = [str(x) for x in np.load(npy_ids, allow_pickle=True)]
     else:
@@ -126,28 +121,53 @@ def _load_embeddings(data_dir: Path) -> tuple[np.ndarray, list[str]]:
     return embs, ids
 
 
+def _find_parquet(data_dir: Path) -> Path | None:
+    """Locate cve_corpus.parquet trying several layout variants.
+
+    Layout variants supported:
+      data_dir/cve_embs/cve_corpus.parquet          (primary)
+      data_dir/cve_embeddings_demo/cve_corpus.parquet
+      data_dir/cve_corpus.parquet                   (flat)
+    Returns None if not found anywhere.
+    """
+    candidates = [
+        data_dir / "cve_embs" / "cve_corpus.parquet",
+        data_dir / "cve_embeddings_demo" / "cve_corpus.parquet",
+        data_dir / "cve_corpus.parquet",
+    ]
+    for p in candidates:
+        if p.exists():
+            log.info("Found CVE corpus parquet at %s", p)
+            return p
+    return None
+
+
 def _load_dataset(data_dir: Path) -> dict[str, str]:
     """Load CVE corpus parquet and return a {cve_id: text} mapping.
+
+    IDs are normalised to uppercase (CVE-YYYY-NNNNN) so they always match
+    the ids produced by _load_embeddings regardless of case.
 
     Returns an empty dict if the file is absent (non-fatal: search still works
     but result dicts will have empty content fields).
     """
-    # NOTE bug-4 fixed: original path was data_dir / 'data' / 'cve_embs' / ...
-    # which double-nests the 'data' segment. Correct relative path:
-    dataset_path = data_dir / "cve_embs" / "cve_corpus.parquet"
-    if not dataset_path.exists():
+    dataset_path = _find_parquet(data_dir)
+    if dataset_path is None:
         log.warning(
-            "CVE corpus parquet not found at %s — content fields will be empty",
-            dataset_path,
+            "CVE corpus parquet not found in %s (tried cve_embs/, cve_embeddings_demo/, ./) "
+            "— content fields will be empty until the parquet is present.",
+            data_dir,
         )
         return {}
-    # NOTE bug-5 fixed: `except FileNotFoundError()` (with parentheses)
-    # instantiates the exception class as match target — the raised exception
-    # is a different instance and is NEVER caught. Use the bare class.
     try:
         lazy_df = pl.scan_parquet(dataset_path)
         df = lazy_df.select(["cve_id", "text"]).collect()
-        return dict(zip(df["cve_id"].to_list(), df["text"].to_list()))
+        # Normalise IDs to uppercase so .npy IDs (e.g. 'CVE-2021-1234') and
+        # parquet IDs always hit the same key.
+        return {
+            str(k).upper(): str(v)
+            for k, v in zip(df["cve_id"].to_list(), df["text"].to_list())
+        }
     except Exception as exc:  # noqa: BLE001
         log.error("Failed to load CVE corpus: %s", exc)
         return {}
@@ -171,11 +191,13 @@ class CveSearchEngine:
         # 1. Embeddings + ids (.npy -> Zarr fallback)
         self.embs, self.ids = _load_embeddings(data_dir)
 
+        # Normalise ids to uppercase so _meta lookup always hits
+        self.ids = [str(i).upper() for i in self.ids]
+
         # 2. CVE text corpus — {cve_id: text} lookup, built once at startup
         self._meta: dict[str, str] = _load_dataset(data_dir)
 
         # 3. Build ArrowSpace graph-Laplacian index
-        #    build(graph_params, items) -> (ArrowSpace, GraphLaplacian)
         build_params = _load_best_params(data_dir)
         self.aspace, self.gl = ArrowSpaceBuilder().build(build_params, self.embs)
 
@@ -190,7 +212,6 @@ class CveSearchEngine:
         if cls._instance is None:
             from .settings import get_settings
             settings = get_settings()
-            # FIX: was `settings.data_dir` — field is named `prompt_data_dir`
             cls._instance = cls(Path(settings.prompt_data_dir))
         return cls._instance
 
@@ -213,12 +234,11 @@ class CveSearchEngine:
 
         Args:
             query : 384-d query embedding (float64).
-            tau   : Spectral sharpness for taumode — higher values sharpen
-                    the Laplacian energy weighting.
-            k     : Number of results to return (capped at build-time topk).
+            tau   : Spectral sharpness for taumode.
+            k     : Number of results to return.
 
         Returns:
-            List of result dicts, ranked by ArrowSpace score (descending).
+            List of result dicts with 'content' always populated from parquet.
         """
         if query.ndim != 1 or query.shape[0] != _DIM:
             raise ValueError(
@@ -226,9 +246,6 @@ class CveSearchEngine:
             )
         query = query.astype(np.float64)
 
-        # Spectral retrieval
-        # aspace.search(item, gl, tau) -> list[tuple[int, float]]
-        # Returns (corpus_index, score) pairs, already sorted descending.
         hits: list[tuple[int, float]] = self.aspace.search(query, self.gl, tau)
 
         pool_size = len(hits)
@@ -243,13 +260,19 @@ class CveSearchEngine:
 
         results: list[dict] = []
         for rank, (corpus_i, score) in enumerate(hits[:k]):
-            cve_id = self.ids[corpus_i]
+            cve_id  = self.ids[corpus_i]                   # already uppercased
+            content = self._meta.get(cve_id, "")           # parquet text
             results.append({
-                "rank"   : rank + 1,
-                "id"     : cve_id,
-                "tau"    : tau,
-                "score"  : float(score),
-                "content": self._meta.get(cve_id, ""),
+                "rank"    : rank + 1,
+                "id"      : cve_id,
+                "title"   : cve_id,                        # PromptSearchResult needs title
+                "tau"     : tau,
+                "score"   : float(score),
+                "content" : content,
+                "body"    : content,                       # keep body in sync
+                "salience": 0.0,
+                "upvotes" : 0,
+                "views"   : 0,
             })
         return results
 
