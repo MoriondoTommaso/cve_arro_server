@@ -1,13 +1,14 @@
 # MODIFIED FILE
 # Original source: Genefold/arro-server (https://github.com/Genefold/arro-server)
 # Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
-# Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
-#   - Added PromptSearchEngine class with MMR re-ranking and saliency weighting
-#   - Added _load_best_params() tuner integration with hardcoded fallback defaults
-#   - Added _norm() min-max normalisation helper
-#   - Added Zarr fallback for embedding load when .npy files are absent
-#   - Aligned salience formula with notebook (author_reputation + log1p(views),
-#     per-field _norm before weighting)
+# Modifications by Tommaso Moriondo for the CVE spectral drift PoC:
+#   - Replaced PromptSearchEngine with CveSearchEngine
+#   - Data loading reads cve_corpus.parquet directly (pandas) instead of db.json / dataset.json
+#   - Parquet schema: cve_id (str), year (int64), text (str), row_id (int64), embedding (object)
+#   - Dropped prompt-specific engagement fields and salience reranker
+#   - Added `year` field to search results to support temporal drift slicing
+#   - Aligned _DIM to 384 (nomic-embed-text-v1.5 MRL output used in CVE corpus)
+#   - Zarr fallback preserved for pre-parquet compatibility
 # See CHANGES.md for full modification record.
 from __future__ import annotations
 
@@ -20,21 +21,14 @@ from arrowspace import ArrowSpaceBuilder
 
 log = logging.getLogger(__name__)
 
-_DIM = 768
+# nomic-embed-text-v1.5 MRL output dimension used when building the CVE corpus.
+_DIM = 384
 
-# Notebook cell 39 weights — applied to *individually normalised* fields.
-W_UP, W_LK, W_REP, W_VIEW = 0.35, 0.35, 0.20, 0.10
-SAL_WEIGHT  = 0.30
 LAM         = 0.7   # MMR diversity weight: 1.0=pure relevance, 0.0=max diversity
 DEFAULT_TAU = 0.75
 
-# Keys that ArrowSpaceBuilder.build() accepts at graph-construction time.
-# tau/alpha/lam are query-time parameters and must never be passed to build().
 _BUILD_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
 
-# Hardcoded fallback params used when tuner results are absent (fresh clone / container).
-# Values come from the tuner run documented in the notebook (search_engine_demo.ipynb cell 22):
-#   {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "sigma": None}
 _DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "sigma": None}
 
 
@@ -45,36 +39,13 @@ def _norm(arr: np.ndarray) -> np.ndarray:
     return (arr - mn) / (mx - mn)
 
 
-def _synthesise_engagement(pid: str) -> tuple[int, int, int, float, int]:
-    """Deterministically derive (upvotes, likes, views, reputation, uses) from an id.
-
-    The bundled demo db.json carries only id + doc_string, so the metadata
-    salience term would be uniformly zero and the salience slider would have
-    no visible effect.  Mapping each id through a stable hash gives the
-    demo a varied engagement profile while keeping responses reproducible
-    across container restarts.
-    """
-    import hashlib
-
-    digest = hashlib.blake2s(pid.encode("utf-8"), digest_size=10).digest()
-    upvotes = int.from_bytes(digest[0:2], "little") % 500          # 0..499
-    likes   = int.from_bytes(digest[2:4], "little") % 1000         # 0..999
-    views   = int.from_bytes(digest[4:6], "little") % 10000        # 0..9999
-    rep     = (int.from_bytes(digest[6:8], "little") % 1000) / 10  # 0.0..99.9
-    uses    = int.from_bytes(digest[8:10], "little") % 200         # 0..199
-    return upvotes, likes, views, rep, uses
-
-
 def _load_best_params(data_dir: Path) -> dict:
     """Load graph build params from the latest tuner run.
 
     Falls back to _DEFAULT_BUILD_PARAMS when the tuner output directory is
-    missing (fresh clone, container, CI).  tau is stripped because it is a
-    query-time parameter and must not be passed to ArrowSpaceBuilder.build().
-    Also fills in `topk` from the notebook default (19) if the tuner output
-    lacks it — required to size the candidate pool consistently.
+    missing (fresh clone, container, CI).
     """
-    tuner_dir = data_dir.parent / "notebooks" / "results" / "arrowspace_tuner"
+    tuner_dir = data_dir.parent / "results" / "cve_arrowspace_fstar"
     try:
         candidates = sorted(tuner_dir.iterdir())
         if not candidates:
@@ -85,8 +56,6 @@ def _load_best_params(data_dir: Path) -> dict:
         filtered = {k: v for k, v in params.items() if k in _BUILD_KEYS}
         if not filtered:
             raise ValueError("best_params.json contained no recognised build keys")
-        # Tuner output sometimes omits topk; fall back to the notebook value (19)
-        # so the candidate pool size matches the notebook's behaviour.
         if "topk" not in filtered:
             filtered["topk"] = _DEFAULT_BUILD_PARAMS["topk"]
         log.info("Loaded ArrowSpace build params from tuner: %s", filtered)
@@ -100,185 +69,99 @@ def _load_best_params(data_dir: Path) -> dict:
         return dict(_DEFAULT_BUILD_PARAMS)
 
 
-def _load_embeddings(data_dir: Path) -> tuple[np.ndarray, list[str]]:
-    """Load corpus embeddings and ids, preferring .npy then falling back to Zarr.
+def _load_corpus_parquet(data_dir: Path) -> tuple[np.ndarray, list[str], dict[str, dict]]:
+    """Load CVE corpus from cve_corpus.parquet.
+
+    Parquet schema (confirmed 2026-05-19):
+        cve_id     : str       — CVE identifier (e.g. 'CVE-1999-0001')
+        year       : int64     — publication year
+        text       : str       — CVE description used for embedding
+        row_id     : int64     — sequential row index
+        embedding  : object    — pre-computed embedding vector (np.ndarray)
 
     Returns
     -------
-    (embs, ids):
-        embs: (N, _DIM) float64 array
-        ids : list of N string ids (sequential `pk_NNNNN` if no ids source exists)
-
-    Resolution order
-    ----------------
-    1. data_dir / nomic_embs / embeddings_nomic_structured_{D}d_raw.npy (+ _ids.npy)
-    2. <repo_root> / embeddings_nomic_structured_{D}d_raw.zarr
-       Ids are sourced from <repo_root>/notebooks/db.json if available,
-       otherwise generated as `pk_{i:05d}` aligned to row order.
+    (embs, ids, meta)
+        embs : (N, _DIM) float64 array
+        ids  : list of N CVE id strings aligned to embs rows
+        meta : dict[cve_id -> {id, content, year, row_id}]
     """
-    npy_embs = data_dir / "nomic_embs" / f"embeddings_nomic_structured_{_DIM}d_raw.npy"
-    npy_ids  = data_dir / "nomic_embs" / f"embeddings_nomic_structured_{_DIM}d_ids.npy"
-    if npy_embs.exists() and npy_ids.exists():
-        embs = np.load(npy_embs).astype(np.float64)
-        ids  = list(np.load(npy_ids, allow_pickle=True))
-        log.info("Loaded embeddings from .npy: %s (shape=%s)", npy_embs, embs.shape)
-        return embs, [str(x) for x in ids]
-
-    # Fallback: load the Zarr that ships with the repo
-    repo_root = data_dir.parent if data_dir.name == "data" else data_dir
-    zarr_path = repo_root / f"embeddings_nomic_structured_{_DIM}d_raw.zarr"
-    if not zarr_path.exists():
-        # Search alternative locations the demo may use
-        alt = data_dir / f"embeddings_nomic_structured_{_DIM}d_raw.zarr"
-        if alt.exists():
-            zarr_path = alt
-        else:
-            raise FileNotFoundError(
-                f"PromptSearchEngine: no embeddings found. Looked for:\n"
-                f"  - {npy_embs}\n"
-                f"  - {zarr_path}\n"
-                f"  - {alt}\n"
-                f"Set ARRO_SERVER_PROMPT_DATA_DIR to a directory containing nomic_embs/ "
-                f"or place embeddings_nomic_structured_{_DIM}d_raw.zarr at the repo root."
-            )
-
     try:
-        import zarr  # noqa: F401
+        import pandas as pd
     except ImportError as exc:
-        raise RuntimeError(
-            "zarr is required to load embeddings from .zarr fallback; "
-            "pip install zarr>=3.0"
-        ) from exc
-    import zarr as _zarr
-    arr = _zarr.open(str(zarr_path), mode="r")
-    embs = np.asarray(arr[:], dtype=np.float64)
-    log.info("Loaded embeddings from Zarr fallback: %s (shape=%s)", zarr_path, embs.shape)
+        raise RuntimeError("pandas is required to load cve_corpus.parquet; pip install pandas") from exc
 
-    # Ids: prefer notebooks/db.json (id-aligned to row order), else synthesise sequential
-    ids: list[str] = []
-    db_path = repo_root / "notebooks" / "db.json"
-    if db_path.exists():
-        try:
-            with db_path.open() as f:
-                db = json.load(f)
-            entries = db.get("_default", db)
-            # tinydb-style db: keys are stringified ints "1", "2", ... in insertion order
-            ordered = sorted(entries.items(), key=lambda kv: int(kv[0]))
-            ids = [str(item.get("id")) for _, item in ordered if item.get("id")]
-            if len(ids) != embs.shape[0]:
-                log.warning(
-                    "db.json id count (%d) != embedding rows (%d); generating sequential ids",
-                    len(ids), embs.shape[0],
-                )
-                ids = []
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            log.warning("Could not parse db.json (%s); generating sequential ids", exc)
-            ids = []
-    if not ids:
-        ids = [f"pk_{i:05d}" for i in range(embs.shape[0])]
-    return embs, ids
+    parquet_path = data_dir / "cve_embs" / "cve_corpus.parquet"
+    if not parquet_path.exists():
+        raise FileNotFoundError(
+            f"CveSearchEngine: cve_corpus.parquet not found at {parquet_path}.\n"
+            f"Run scripts/build_corpus.py to generate it, or set ARRO_SERVER_PROMPT_DATA_DIR "
+            f"to a directory containing cve_embs/cve_corpus.parquet."
+        )
 
+    df = pd.read_parquet(parquet_path)
+    required = {"cve_id", "year", "text", "row_id", "embedding"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"cve_corpus.parquet is missing expected columns: {missing}. "
+            f"Found: {list(df.columns)}"
+        )
 
-def _load_dataset(data_dir: Path, ids: list[str]) -> list[dict]:
-    """Load dataset.json (prompt metadata) with fallbacks.
+    # Stack embeddings into a contiguous (N, _DIM) float64 matrix.
+    # Each cell in the `embedding` column is a 1-D numpy array of length _DIM.
+    embs = np.vstack(df["embedding"].values).astype(np.float64)
+    if embs.shape[1] != _DIM:
+        log.warning(
+            "Embedding dimension in parquet is %d, expected _DIM=%d. "
+            "Update _DIM in search_engine.py if the model changed.",
+            embs.shape[1], _DIM,
+        )
 
-    Resolution order
-    ----------------
-    1. data_dir / dataset.json
-    2. <repo_root>/notebooks/db.json (tinydb dump with id + doc_string only —
-       useful enough to display content even without engagement metadata)
+    ids: list[str] = df["cve_id"].tolist()
 
-    Raises FileNotFoundError with an actionable message if nothing is available.
-    """
-    dataset_path = data_dir / "dataset.json"
-    if dataset_path.exists():
-        with dataset_path.open() as f:
-            return json.load(f)
+    meta: dict[str, dict] = {
+        row["cve_id"]: {
+            "id":      row["cve_id"],
+            "content": row["text"],
+            "year":    int(row["year"]),
+            "row_id":  int(row["row_id"]),
+        }
+        for row in df[["cve_id", "text", "year", "row_id"]].to_dict(orient="records")
+    }
 
-    repo_root = data_dir.parent if data_dir.name == "data" else data_dir
-    db_path = repo_root / "notebooks" / "db.json"
-    if db_path.exists():
-        try:
-            with db_path.open() as f:
-                db = json.load(f)
-            entries = db.get("_default", db)
-            # The bundled demo db.json carries only `id` + `doc_string`.  If the
-            # engagement fields are absent we synthesize deterministic, per-id
-            # values so the salience reranker has signal in the demo container.
-            # The synthetic values are stable across processes (hash → fixed
-            # seed) so /api/prompts/* responses are reproducible.
-            records: list[dict] = []
-            for _, item in entries.items():
-                if "id" not in item:
-                    continue
-                pid = item["id"]
-                has_engagement = any(
-                    item.get(k) is not None
-                    for k in ("upvotes", "likes", "views", "author_reputation", "uses")
-                )
-                if has_engagement:
-                    upvotes = int(item.get("upvotes") or 0)
-                    likes   = int(item.get("likes")   or 0)
-                    views   = int(item.get("views")   or 0)
-                    rep     = float(item.get("author_reputation") or 0)
-                    uses    = int(item.get("uses")    or 0)
-                else:
-                    upvotes, likes, views, rep, uses = _synthesise_engagement(pid)
-                records.append({
-                    "id":       pid,
-                    "content":  item.get("doc_string", ""),
-                    "title":    item.get("title"),
-                    "tags":     item.get("tags", []),
-                    "upvotes":  upvotes,
-                    "likes":    likes,
-                    "uses":     uses,
-                    "views":    views,
-                    "author_reputation": rep,
-                })
-            log.info("Loaded dataset from db.json fallback: %d records", len(records))
-            return records
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            log.warning("Could not parse db.json (%s)", exc)
-
-    raise FileNotFoundError(
-        f"PromptSearchEngine: dataset.json not found at {dataset_path} "
-        f"and no fallback in {repo_root}/notebooks/db.json. "
-        f"Provide dataset.json in {data_dir} or set ARRO_SERVER_PROMPT_DATA_DIR."
+    log.info(
+        "Loaded CVE corpus from parquet: %d records, embedding shape %s",
+        len(ids), embs.shape,
     )
+    return embs, ids, meta
 
 
-class PromptSearchEngine:
-    """Singleton that holds the ArrowSpace index and exposes semantic search.
+class CveSearchEngine:
+    """Singleton that holds the ArrowSpace index over CVE embeddings.
 
-    The data directory is resolved from Settings.prompt_data_dir so the
-    engine works correctly both in development layout and inside containers.
+    Replaces PromptSearchEngine for the CVE spectral drift PoC.
+    Metadata is sourced directly from cve_corpus.parquet — no db.json
+    or dataset.json required.
     """
 
-    _instance: "PromptSearchEngine | None" = None
+    _instance: "CveSearchEngine | None" = None
 
     def __init__(self, data_dir: Path) -> None:
-        # 1. embeddings + ids (with .npy → .zarr fallback)
-        self.embs, self.ids = _load_embeddings(data_dir)
+        # 1. Load corpus: embeddings + ids + metadata from parquet
+        self.embs, self.ids, self._meta = _load_corpus_parquet(data_dir)
 
-        # 2. dataset metadata — build lookup once, not on every search call
-        self.dataset: list[dict] = _load_dataset(data_dir, self.ids)
-        self._meta: dict[str, dict] = {item["id"]: item for item in self.dataset if "id" in item}
-
-        # 3. build ArrowSpace graph-Laplacian index.
-        #    build() signature: build(graph_params: dict | None, items: np.ndarray)
-        #    returns (ArrowSpace, GraphLaplacian)
+        # 2. Build ArrowSpace graph-Laplacian index
         build_params = _load_best_params(data_dir)
         self.aspace, self.gl = ArrowSpaceBuilder().build(build_params, self.embs)
 
-        # 4. Cached audit artefacts (PCA, CSR Laplacian) — populated lazily on
-        #    first /api/prompts/audit call; reused for subsequent requests so
-        #    the 20k × 768 PCA fit does not run on every search.
+        # 3. Audit cache (PCA, CSR Laplacian) — populated lazily on first /api/cve/audit
         self._audit_cache: dict | None = None
 
-        PromptSearchEngine._instance = self
+        CveSearchEngine._instance = self
 
     @classmethod
-    def get(cls) -> "PromptSearchEngine":
+    def get(cls) -> "CveSearchEngine":
         if cls._instance is None:
             from .settings import get_settings
             settings = get_settings()
@@ -287,113 +170,84 @@ class PromptSearchEngine:
 
     @classmethod
     def reset(cls) -> None:
-        """Clear the cached singleton instance. Intended for tests and reload scenarios."""
+        """Clear the cached singleton. Intended for tests and reload scenarios."""
         cls._instance = None
-
-    # ------------------------------------------------------------------
-    # Search
-    # ------------------------------------------------------------------
-
-    def _compute_salience(self, raw_idxs: list[int]) -> np.ndarray:
-        """Compute salience for a pool of candidates using the notebook formula.
-
-        Each metadata field is normalised individually across the candidate
-        pool before being weighted, matching `_norm()` calls in cell 39 of
-        search_engine_demo.ipynb.  Views are log1p-transformed before
-        normalisation (long-tail distribution).
-        """
-        records = [self._meta.get(self.ids[i], {}) for i in raw_idxs]
-        upvotes_raw    = np.array([float(r.get("upvotes", 0))             for r in records])
-        likes_raw      = np.array([float(r.get("likes", 0))               for r in records])
-        # Prefer notebook field `author_reputation`; fall back to `uses` so
-        # datasets that only carry the older engagement schema still work.
-        reputation_raw = np.array([
-            float(r.get("author_reputation", r.get("uses", 0)))
-            for r in records
-        ])
-        views_log_raw  = np.log1p(np.array([float(r.get("views", 0))      for r in records]))
-
-        upvotes    = _norm(upvotes_raw)
-        likes      = _norm(likes_raw)
-        reputation = _norm(reputation_raw)
-        views      = _norm(views_log_raw)
-        return (W_UP * upvotes + W_LK * likes + W_REP * reputation + W_VIEW * views)
 
     def search(
         self,
         query: np.ndarray,
-        tau: float      = DEFAULT_TAU,
-        alpha: float    = 0.5,
-        lam: float      = LAM,
-        k: int          = 10,
-        salience: float = SAL_WEIGHT,
+        tau: float   = DEFAULT_TAU,
+        alpha: float = 0.5,
+        lam: float   = LAM,
+        k: int       = 10,
+        year_from: int | None = None,
+        year_to:   int | None = None,
     ) -> list[dict]:
-        """Return top-k results using ArrowSpace spectral search + MMR re-ranking.
+        """Return top-k CVE results using ArrowSpace spectral search + MMR re-ranking.
 
         Args:
-            query:    768-d query embedding (float64).
-            tau:      Spectral sharpness passed to ArrowSpace taumode search.
-            alpha:    Blend factor. 0.0 = pure spectral, 1.0 = pure cosine similarity.
-            lam:      MMR diversity weight. 1.0 = pure relevance, 0.0 = maximum diversity.
-            k:        Number of results to return. Must be <= topk set at build time.
-            salience: Salience weight in [0, 1]. 0 disables metadata salience,
-                      1 gives it full influence in the combined score.
+            query:     _DIM-d query embedding (float64).
+            tau:       Spectral sharpness passed to ArrowSpace taumode search.
+            alpha:     Blend factor. 0.0 = pure spectral, 1.0 = pure cosine similarity.
+            lam:       MMR diversity weight. 1.0 = pure relevance, 0.0 = max diversity.
+            k:         Number of results to return.
+            year_from: Optional lower bound on CVE publication year (inclusive).
+            year_to:   Optional upper bound on CVE publication year (inclusive).
         """
         if query.ndim != 1 or query.shape[0] != _DIM:
-            raise ValueError(f"Query vector must be 1-D with dim={_DIM}, got shape {query.shape}")
+            raise ValueError(
+                f"Query vector must be 1-D with dim={_DIM}, got shape {query.shape}"
+            )
 
         query = query.astype(np.float64)
 
-        # 1. Spectral retrieval.
-        #    Signature: aspace.search(item: np.ndarray[f64, 1d], gl: GraphLaplacian, tau: float)
-        #    Returns:   list[tuple[int, float]]  — (corpus_index, score) pairs.
-        #    Pool size is fixed at build-time topk; k must be <= topk.
+        # 1. Spectral retrieval — returns (corpus_index, score) pairs
         raw: list[tuple[int, float]] = self.aspace.search(query, self.gl, tau)
-        raw_idxs = [r[0] for r in raw]
+
+        # 2. Optional year filter — applied post-retrieval on the candidate pool
+        if year_from is not None or year_to is not None:
+            filtered = []
+            for idx, score in raw:
+                yr = self._meta.get(self.ids[idx], {}).get("year")
+                if yr is None:
+                    continue
+                if year_from is not None and yr < year_from:
+                    continue
+                if year_to is not None and yr > year_to:
+                    continue
+                filtered.append((idx, score))
+            raw = filtered
+
+        if not raw:
+            return []
+
+        raw_idxs  = [r[0] for r in raw]
         raw_sims  = np.array([r[1] for r in raw], dtype=np.float64)
 
         pool_size = len(raw_idxs)
-        if k > pool_size:
-            log.warning(
-                "Requested k=%d but search pool only has %d results (topk at build time). "
-                "Returning %d results.",
-                k, pool_size, pool_size,
-            )
-            k = pool_size
+        k = min(k, pool_size)
 
-        # 2. Cosine similarity between query and each candidate.
+        # 3. Cosine similarity between query and each candidate
         query_norm = query / (np.linalg.norm(query) + 1e-9)
-        pool_embs  = self.embs[raw_idxs]                                      # (pool, D)
+        pool_embs  = self.embs[raw_idxs]
         pool_norms = pool_embs / (np.linalg.norm(pool_embs, axis=1, keepdims=True) + 1e-9)
-        cos_sims   = pool_norms @ query_norm                                   # (pool,)
+        cos_sims   = pool_norms @ query_norm
 
-        # 3. Alpha-blend: spectral score vs cosine similarity.
-        spectral_norm = _norm(raw_sims)
-        cos_norm      = _norm(cos_sims)
-        relevance     = alpha * cos_norm + (1.0 - alpha) * spectral_norm
+        # 4. Alpha-blend: spectral score vs cosine similarity
+        relevance = alpha * _norm(cos_sims) + (1.0 - alpha) * _norm(raw_sims)
 
-        # 4. Saliency: notebook formula — author_reputation + log1p(views), each
-        #    field normalised individually before weighting.
-        sal_scores = self._compute_salience(raw_idxs)
-
-        # 5. Combined score: relevance blend + saliency.
-        sal_w = float(np.clip(salience, 0.0, 1.0))
-        combined = (1.0 - sal_w) * relevance + sal_w * _norm(sal_scores)
-
-        # 6. MMR re-ranking.
-        #    Use L2-normalised embeddings for inter-candidate cosine similarity
-        #    so the diversity penalty is directional, not magnitude-dependent.
-        selected : list[int] = []
+        # 5. MMR re-ranking
+        selected:  list[int] = []
         remaining = list(range(pool_size))
 
         while remaining and len(selected) < k:
             rem_arr = np.array(remaining)
             if not selected:
-                best_local = int(np.argmax(combined[rem_arr]))
+                best_local = int(np.argmax(relevance[rem_arr]))
             else:
-                sel_norms  = pool_norms[selected]                              # (sel, D)
-                sim_to_sel = (pool_norms[rem_arr] @ sel_norms.T).max(axis=1)  # (rem,)
-                mmr_scores = lam * combined[rem_arr] - (1.0 - lam) * sim_to_sel
+                sel_norms  = pool_norms[selected]
+                sim_to_sel = (pool_norms[rem_arr] @ sel_norms.T).max(axis=1)
+                mmr_scores = lam * relevance[rem_arr] - (1.0 - lam) * sim_to_sel
                 best_local = int(np.argmax(mmr_scores))
             best = remaining[best_local]
             selected.append(best)
@@ -404,17 +258,20 @@ class PromptSearchEngine:
             corpus_i = raw_idxs[pool_i]
             item     = self._meta.get(self.ids[corpus_i], {})
             results.append({
-                "rank":      rank + 1,
-                "id":        self.ids[corpus_i],
-                'tau':     tau,
-                "score":     float(combined[pool_i]),
-                "sim":       float(raw_sims[pool_i]),
-                "content":   item.get("content", item.get("text", "")),
-                "salience": float(sal_scores[pool_i]),
-                "tags":      item.get("tags", []),
-                "upvotes":   item.get("upvotes", 0),
-                "likes":     item.get("likes", 0),
-                "uses":      item.get("uses", 0),
-                "views":     item.get("views", 0),
+                "rank":    rank + 1,
+                "id":      self.ids[corpus_i],
+                "tau":     tau,
+                "score":   float(relevance[pool_i]),
+                "sim":     float(raw_sims[pool_i]),
+                "content": item.get("content", ""),
+                "year":    item.get("year"),
+                "row_id":  item.get("row_id"),
             })
         return results
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility alias so existing imports of PromptSearchEngine
+# continue to work without changes in routes.py and tests.
+# ---------------------------------------------------------------------------
+PromptSearchEngine = CveSearchEngine
