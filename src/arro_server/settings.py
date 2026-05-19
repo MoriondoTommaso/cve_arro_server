@@ -4,6 +4,9 @@
 # Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
 #   - Added `prompt_data_dir` field for LEAF Kaban data volume path
 #   - Added `embedder_model` field for HuggingFace model id override
+# Modifications for CVE spectral drift demo:
+#   - Added `cve_period_a` / `cve_period_b` fields pointing at the two
+#     embedding slices used by CveDriftEngine (/api/drift/* routes)
 # See CHANGES.md for full modification record.
 from __future__ import annotations
 
@@ -16,6 +19,11 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 log = logging.getLogger(__name__)
+
+# Default paths — resolved relative to the package root so the dev layout
+# (repo/data/cve_embeddings_demo/) works without any env var.
+_DATA_DIR = Path(__file__).parents[2] / "data"
+_CVE_DEMO_DIR = _DATA_DIR / "cve_embeddings_demo"
 
 
 class Settings(BaseSettings):
@@ -60,11 +68,18 @@ class Settings(BaseSettings):
     # Defaults to the `data/` sibling of the package root so the dev layout
     # (repo/data/) works without any env var.  Set ARRO_SERVER_PROMPT_DATA_DIR
     # in containers / deployments to point at the mounted data volume.
-    prompt_data_dir: str = str(Path(__file__).parents[2] / "data")
+    prompt_data_dir: str = str(_DATA_DIR)
 
     # HuggingFace model id used by EmbedderService.
     # Override if you want to swap in a different nomic-compatible model.
     embedder_model: str = "nomic-ai/nomic-embed-text-v1.5"
+
+    # ── CVE spectral drift (two-period demo) ────────────────────────────────
+    # Paths to the two CVE embedding slices consumed by CveDriftEngine.
+    # Supports both .npy files and .zarr directories.
+    # Override with ARRO_SERVER_CVE_PERIOD_A / ARRO_SERVER_CVE_PERIOD_B.
+    cve_period_a: str = str(_CVE_DEMO_DIR / "embs_99_to_14.npy")
+    cve_period_b: str = str(_CVE_DEMO_DIR / "embs_15_to_2025.npy")
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod

@@ -5,6 +5,9 @@
 #   - Added /api/prompts/* route group (health, warm, lambdas, graph_laplacian,
 #     audit, search, nl_search) for LEAF Kaban semantic prompt search
 #   - Updated /api/health to report prompt_engine_ready and embedder_ready
+# Modifications for CVE spectral drift demo:
+#   - Added /api/drift/* route group (health, lambdas, score, search)
+#     backed by CveDriftEngine (two-period CVE spectral comparison)
 # See CHANGES.md for full modification record.
 """API route handlers for arro-server.
 
@@ -43,6 +46,11 @@ GET  /api/prompts/graph_laplacian            -- GL metadata for prompt corpus
 GET  /api/prompts/audit                      -- full audit payload: degree stats, Fiedler, PCA 2D
 POST /api/prompts/search                     -- LEAF kaban semantic search (pre-embedded vector)
 POST /api/prompts/nl_search                  -- LEAF kaban NL search (server embeds query)
+
+GET  /api/drift/health                       -- are both CVE period indices ready?
+GET  /api/drift/lambdas                      -- eigenvalues for period_a and period_b
+GET  /api/drift/score                        -- scalar Wasserstein drift score
+POST /api/drift/search                       -- side-by-side spectral search across both periods
 """
 
 from __future__ import annotations
@@ -68,6 +76,9 @@ from ..slicing import enforce_window_budget, parse_slice
 from ..storage import StorageRegistry, get_registry
 from ..storage.zarr_fs import zarr_available
 from .schemas import (
+    DriftSearchRequest,
+    DriftSearchResponse,
+    DriftPeriodResult,
     IndexBuildRequest,
     NLSearchRequest,
     PromptSearchRequest,
@@ -969,4 +980,122 @@ def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:
         lam=body.lam,
         results=[PromptSearchResult(**r) for r in raw],
         result_count=len(raw),
+    )
+
+
+# ---------------------------------------------------------------------------
+# CVE spectral drift endpoints
+# ---------------------------------------------------------------------------
+
+
+def _get_drift_engine():
+    """Return the CveDriftEngine singleton, raising JSON 503 on failure."""
+    try:
+        from ..drift_engine import CveDriftEngine
+        return CveDriftEngine.get()
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"CVE drift engine: embedding file not found: {exc}. "
+                "Set ARRO_SERVER_CVE_PERIOD_A and ARRO_SERVER_CVE_PERIOD_B to valid paths "
+                "and restart the server."
+            ),
+        ) from exc
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail=f"CVE drift engine requires pyarrowspace: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"CVE drift engine failed to initialise: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
+@router.get("/drift/health")
+def drift_health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    """Report readiness of the two CVE period indices.
+
+    Returns the configured paths and whether the engine singleton is built.
+    Does NOT trigger engine initialisation — call GET /api/drift/score or
+    POST /api/drift/search to warm it up.
+    """
+    from ..drift_engine import CveDriftEngine
+    engine_ready = CveDriftEngine._instance is not None
+    return {
+        "status": "ready" if engine_ready else "cold",
+        "engine_ready": engine_ready,
+        "cve_period_a": settings.cve_period_a,
+        "cve_period_b": settings.cve_period_b,
+    }
+
+
+@router.get("/drift/lambdas")
+def drift_lambdas() -> dict[str, Any]:
+    """Return eigenvalue distributions for both CVE periods.
+
+    Response shape::
+
+        {
+            "period_a": {"label": "period_a", "lambdas": [...], "n": 128},
+            "period_b": {"label": "period_b", "lambdas": [...], "n": 128},
+            "drift_score": 0.0034
+        }
+    """
+    engine = _get_drift_engine()
+    return {
+        "period_a": {
+            "label": engine.period_a.label,
+            "lambdas": engine.period_a.lambdas,
+            "n": len(engine.period_a.lambdas),
+        },
+        "period_b": {
+            "label": engine.period_b.label,
+            "lambdas": engine.period_b.lambdas,
+            "n": len(engine.period_b.lambdas),
+        },
+        "drift_score": engine.drift_score,
+    }
+
+
+@router.get("/drift/score")
+def drift_score() -> dict[str, Any]:
+    """Return the scalar Wasserstein-1 drift score between the two CVE periods.
+
+    This is the cheapest way to check whether spectral drift is significant
+    after a data reload. The score is recomputed each time the engine is
+    rebuilt (call CveDriftEngine.reset() + this endpoint to refresh).
+    """
+    engine = _get_drift_engine()
+    return {
+        "drift_score": engine.drift_score,
+        "period_a": engine.period_a.label,
+        "period_b": engine.period_b.label,
+        "period_a_n_lambdas": len(engine.period_a.lambdas),
+        "period_b_n_lambdas": len(engine.period_b.lambdas),
+        "interpretation": (
+            "low" if engine.drift_score < 0.01
+            else "medium" if engine.drift_score < 0.05
+            else "high"
+        ),
+    }
+
+
+@router.post("/drift/search", response_model=DriftSearchResponse)
+def drift_search(body: DriftSearchRequest) -> DriftSearchResponse:
+    """Run the same query vector against both CVE period indices.
+
+    Returns side-by-side spectral search results together with the current
+    drift score, so callers can compare how the same concept is positioned
+    differently in the 1999-2014 vs 2015-2025 CVE embedding spaces.
+    """
+    engine    = _get_drift_engine()
+    query_vec = np.asarray(body.vector, dtype=np.float64)
+    raw       = engine.search_both(query_vec, k=body.k, tau=body.tau)
+    return DriftSearchResponse(
+        drift_score=raw["drift_score"],
+        period_a=DriftPeriodResult(**raw["period_a"]),
+        period_b=DriftPeriodResult(**raw["period_b"]),
     )

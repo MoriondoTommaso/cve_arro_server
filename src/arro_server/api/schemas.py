@@ -193,3 +193,40 @@ class IndexBuildRequest(BaseModel):
             if "graph_params" not in data and data.keys() <= _GRAPH_PARAM_KEYS:
                 return {"graph_params": data}
         return data
+
+
+# ---------------------------------------------------------------------------
+# CVE drift schemas
+# ---------------------------------------------------------------------------
+
+class DriftSearchRequest(BaseModel):
+    """Body for POST /api/drift/search.
+
+    Runs the same query vector against both CVE period indices and returns
+    side-by-side results together with the current spectral drift score.
+    """
+
+    vector: list[float] = Field(
+        ...,
+        description="Query embedding vector. Dimensionality must match the CVE embeddings.",
+    )
+    k: int   = Field(10, ge=1, le=200, description="Results to return per period.")
+    tau: float = Field(0.5, ge=0.0, le=5.0, description="Taumode spectral sharpness.")
+
+
+class DriftPeriodResult(BaseModel):
+    """Results for one time period in a drift search response."""
+
+    label: str
+    results: list[dict[str, Any]]
+
+
+class DriftSearchResponse(BaseModel):
+    """Response for POST /api/drift/search."""
+
+    drift_score: float = Field(
+        ...,
+        description="Wasserstein-1 distance between period_a and period_b eigenvalue distributions.",
+    )
+    period_a: DriftPeriodResult
+    period_b: DriftPeriodResult
