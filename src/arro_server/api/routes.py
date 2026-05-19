@@ -39,13 +39,13 @@ GET  /api/datasets/{id}/spot/motives/energy
 GET  /api/datasets/{id}/spot/subgraphs/centroids
 GET  /api/datasets/{id}/spot/subgraphs/motives
 
-GET  /api/prompts/health                     -- embedder + engine readiness
-GET  /api/prompts/warm                       -- build aspace+gl, return index stats
-GET  /api/prompts/lambdas                    -- eigenvalue distribution for prompt corpus
-GET  /api/prompts/graph_laplacian            -- GL metadata for prompt corpus
-GET  /api/prompts/audit                      -- full audit payload: degree stats, Fiedler, PCA 2D
-POST /api/prompts/search                     -- LEAF kaban semantic search (pre-embedded vector)
-POST /api/prompts/nl_search                  -- LEAF kaban NL search (server embeds query)
+GET  /api/prompts/health
+GET  /api/prompts/warm
+GET  /api/prompts/lambdas
+GET  /api/prompts/graph_laplacian
+GET  /api/prompts/audit
+POST /api/prompts/search
+POST /api/prompts/nl_search
 
 GET  /api/drift/health                       -- are both CVE period indices ready?
 GET  /api/drift/lambdas                      -- eigenvalues for period_a and period_b
@@ -232,9 +232,9 @@ def dataset_stats(
     if h.fs_path is None:
         return {}
     try:
-        return adapter.stats_data(h.summary.dataset_id)    
+        return adapter.stats_data(h.summary.dataset_id)
     except Exception:
-        return {} 
+        return {}
 
 
 @router.get("/datasets/{dataset_id}/manifold")
@@ -247,9 +247,9 @@ def dataset_manifold(
     if h.fs_path is None:
         return {}
     try:
-        return adapter.manifold_data(h.summary.dataset_id) 
+        return adapter.manifold_data(h.summary.dataset_id)
     except Exception:
-        return {} 
+        return {}
 
 
 @router.get("/datasets/{dataset_id}/search")
@@ -529,13 +529,6 @@ def spot_subgraph_motives(
 
 
 def _get_engine() -> PromptSearchEngine:
-    """Return the PromptSearchEngine singleton, raising a JSON 503 on any failure.
-
-    Catches all exception types so that errors from ArrowSpaceBuilder.build()
-    (ValueError, RuntimeError, library-internal errors) are returned as a
-    proper JSON body instead of the plain-text 'Internal Server Error' that
-    FastAPI emits for unhandled exceptions.
-    """
     try:
         return PromptSearchEngine.get()
     except FileNotFoundError as exc:
@@ -558,7 +551,6 @@ def _get_engine() -> PromptSearchEngine:
 
 
 def _get_embedder():
-    """Return the EmbedderService singleton, raising a JSON 503 on any failure."""
     try:
         from ..embedder import EmbedderService
         return EmbedderService.get()
@@ -576,11 +568,6 @@ def _get_embedder():
 
 @router.get("/prompts/health")
 def prompts_health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    """Return readiness of the prompt engine and embedder.
-
-    Also reports the resolved prompt_data_dir so operators can verify the
-    path without needing server logs.
-    """
     engine_ready   = PromptSearchEngine._instance is not None
     embedder_ready = False
     embedder_model = None
@@ -597,21 +584,13 @@ def prompts_health(settings: Settings = Depends(get_settings)) -> dict[str, Any]
         "prompt_engine_ready": engine_ready,
         "embedder_ready":      embedder_ready,
         "embedder_model":      embedder_model,
-        # Expose the resolved path so operators can confirm it without logs
         "prompt_data_dir":     settings.prompt_data_dir,
     }
 
 
 @router.get("/prompts/warm")
 def prompts_warm() -> dict[str, Any]:
-    """Initialise the search engine (builds ArrowSpace index on first call).
-
-    Returns 200 with a JSON body in all outcomes:
-    - 'warm'        → engine + embedder both ready
-    - 'engine_only' → engine ready, embedder not installed / not yet loaded
-    - raises 503    → engine failed to initialise (detail contains the error)
-    """
-    engine = _get_engine()  # raises JSON 503 on failure
+    engine = _get_engine()
     embedder_ready = False
     try:
         _get_embedder()
@@ -664,10 +643,6 @@ def prompts_graph_laplacian() -> dict[str, Any]:
 def prompts_audit() -> dict[str, Any]:
     engine = _get_engine()
 
-    # Return cached payload if available — PCA on 20k × 768 is the expensive
-    # part of this handler, and the result does not change unless the engine
-    # is rebuilt. Cache lives on the engine singleton and is cleared on
-    # PromptSearchEngine.reset().
     cached = getattr(engine, "_audit_cache", None)
     if cached is not None:
         return cached
@@ -680,7 +655,6 @@ def prompts_audit() -> dict[str, Any]:
             detail="scikit-learn is required for /prompts/audit."
         ) from exc
 
-
     n = engine.aspace.nfeatures if hasattr(engine, 'aspace') else 0
     degrees = np.zeros(n)
     fiedler_val, spectral_gap = 0.0, 0.0
@@ -688,7 +662,6 @@ def prompts_audit() -> dict[str, Any]:
     hub_fraction, tail_fraction = 0.0, 0.0
     n_edges, sparsity, degree_cv = 0, 1.0, 0.0
 
-    
     try:
         data, indices, indptr, shape = engine.gl.to_csr()
         L = sp.csr_matrix(
@@ -697,36 +670,26 @@ def prompts_audit() -> dict[str, Any]:
              np.array(indptr, dtype=np.int32)),
             shape=tuple(shape),
         )
-        
         n = L.shape[0]
         nnz = L.nnz
-        
         if n > 0:
             n_edges = (nnz - n) // 2
             sparsity = 1.0 - (nnz / (n * n))
-            
-            # 3. Extract Degrees
             degrees = np.array(L.diagonal(), dtype=np.float64)
             avg_degree = float(degrees.mean())
             std_degree = float(degrees.std())
             degree_cv = std_degree / avg_degree if avg_degree > 0 else 0.0
-            
-            # 4. Degree Buckets (Hubs & Tails)
             p10, p90 = np.percentile(degrees, [10, 90])
             hub_count = int((degrees > p90).sum())
             isolated_count = int((degrees < p10).sum())
             hub_fraction = float(hub_count / n)
             tail_fraction = float(isolated_count / n)
-            
-            # 5. Fiedler & Spectral Gap (via Normalized Laplacian)
             try:
                 safe_d = np.where(degrees > 1e-12, degrees, 1e-12)
                 d_inv_sqrt = sp.diags(1.0 / np.sqrt(safe_d))
                 L_norm = d_inv_sqrt @ L @ d_inv_sqrt
-                
-                # k=6 to safely grab lambda 2 and lambda 3
                 eigs = spla.eigsh(
-                    L_norm, k=6, which="SM", 
+                    L_norm, k=6, which="SM",
                     return_eigenvectors=False, tol=1e-5, maxiter=3000
                 )
                 eigs_sorted = sorted(np.real(eigs))
@@ -734,28 +697,18 @@ def prompts_audit() -> dict[str, Any]:
                 spectral_gap = float(eigs_sorted[2] - eigs_sorted[1]) if len(eigs_sorted) > 2 else 0.0
             except Exception as e:
                 print(f"[warn] Spectral computation failed: {e}")
-                
     except Exception as e:
         print(f"[error] Laplacian reconstruction failed: {e}")
 
-    # 6. Dimension Reduction for Visualization
-    #
-    # The graph Laplacian is built over the *feature* axis (n_nodes == nfeatures,
-    # e.g. 768) — not over the corpus rows. The audit manifold colours each node
-    # by its true L_ii degree, so the PCA used for layout must produce exactly
-    # n_nodes points. We therefore PCA the columns of the embedding matrix
-    # (each feature gets a vector of length nitems) when n_nodes matches
-    # nfeatures, and otherwise fall back to PCA over rows.
     try:
         pca = PCA(n_components=2)
         if n > 0 and hasattr(engine, "embs") and engine.embs is not None:
             embs = np.asarray(engine.embs)
             if embs.shape[1] == n:
-                node_vecs = embs.T          # (n_nodes, nitems) — one row per feature/node
+                node_vecs = embs.T
             elif embs.shape[0] == n:
-                node_vecs = embs            # (n_nodes, nfeatures) — one row per sample/node
+                node_vecs = embs
             else:
-                # Mismatched shapes: degrade gracefully — surface still renders below
                 node_vecs = embs[:n] if embs.shape[0] >= n else embs
             coords = pca.fit_transform(node_vecs)
             explained_variance = pca.explained_variance_ratio_.tolist()
@@ -770,9 +723,6 @@ def prompts_audit() -> dict[str, Any]:
         coords_list = []
         explained_variance = []
 
-    # 7. Pre-compute Graph Laplacian Manifold (server-side, mirrors the
-    #    reference Python script). The frontend renders this payload directly
-    #    via Plotly Surface + Scatter3d hubs — no IDW guessing in the browser.
     laplacian_manifold: dict[str, Any] | None = None
     pc1_pct: float | None = None
     pc2_pct: float | None = None
@@ -784,14 +734,11 @@ def prompts_audit() -> dict[str, Any]:
             x_pts = np.asarray(coords[:, 0], dtype=np.float64)
             y_pts = np.asarray(coords[:, 1], dtype=np.float64)
             deg_arr = np.asarray(degrees, dtype=np.float64)
-
             p05, p95 = np.percentile(deg_arr, [5, 95])
             z_pts = np.clip(deg_arr, p05, p95)
-
             grid_res = 100 if n > 5000 else 120
             x_min, x_max = float(x_pts.min()), float(x_pts.max())
             y_min, y_max = float(y_pts.min()), float(y_pts.max())
-            # guard against degenerate spans
             if x_max - x_min < 1e-9:
                 x_max = x_min + 1e-6
             if y_max - y_min < 1e-9:
@@ -799,7 +746,6 @@ def prompts_audit() -> dict[str, Any]:
             xi = np.linspace(x_min, x_max, grid_res)
             yi = np.linspace(y_min, y_max, grid_res)
             Xi, Yi = np.meshgrid(xi, yi)
-
             pts_xy = np.column_stack([x_pts, y_pts])
             Zi = griddata(pts_xy, z_pts, (Xi, Yi), method="cubic")
             mask = np.isnan(Zi)
@@ -807,8 +753,6 @@ def prompts_audit() -> dict[str, Any]:
                 Zi_nn = griddata(pts_xy, z_pts, (Xi, Yi), method="nearest")
                 Zi = np.where(mask, Zi_nn, Zi)
             Zi = gaussian_filter(Zi, sigma=2.5)
-
-            # Hubs: top 15% by degree, like the reference script.
             hub_thr = float(np.percentile(deg_arr, 85))
             hub_mask = deg_arr > hub_thr
             hub_idx = np.flatnonzero(hub_mask)
@@ -822,7 +766,6 @@ def prompts_audit() -> dict[str, Any]:
                 if label is None:
                     label = f"node {i}"
                 hub_text.append(f"{label} (Lᵢᵢ={float(deg_arr[i]):.3f})")
-
             x_label = f"PC1 ({pc1_pct:.1f}%)" if pc1_pct is not None else "PC1"
             y_label = f"PC2 ({pc2_pct:.1f}%)" if pc2_pct is not None else "PC2"
             subtitle = (
@@ -831,7 +774,6 @@ def prompts_audit() -> dict[str, Any]:
                 if pc1_pct is not None and pc2_pct is not None
                 else "Node connectivity as proxy for local manifold curvature"
             )
-
             laplacian_manifold = {
                 "n_nodes": int(n),
                 "x_grid": xi.tolist(),
@@ -853,11 +795,6 @@ def prompts_audit() -> dict[str, Any]:
                 "hub_text": hub_text,
                 "title": f"Graph Laplacian Manifold ({int(n)} nodes)",
             }
-            print(
-                f"[audit] laplacian_manifold built: n_nodes={n} grid={grid_res} "
-                f"deg min/max/std={float(deg_arr.min()):.4f}/{float(deg_arr.max()):.4f}/"
-                f"{float(deg_arr.std()):.4f} hubs={int(hub_mask.sum())}"
-            )
         else:
             print(
                 f"[audit] laplacian_manifold skipped: n_nodes={n} "
@@ -868,8 +805,6 @@ def prompts_audit() -> dict[str, Any]:
         print(f"[warn] laplacian_manifold pre-compute failed: {exc}")
         laplacian_manifold = None
 
-    # Build-time graph params used to construct ArrowSpace, exposed so the
-    # frontend can display the manifold/build settings in sync with the engine.
     build_params: dict[str, Any] = {}
     try:
         gl_params = getattr(engine.gl, "graph_params", None)
@@ -880,7 +815,6 @@ def prompts_audit() -> dict[str, Any]:
     if not build_params:
         from ..search_engine import _DEFAULT_BUILD_PARAMS
         build_params = dict(_DEFAULT_BUILD_PARAMS)
-    # Ensure sigma key is always present (notebook explicitly sets sigma=None)
     build_params.setdefault("sigma", None)
 
     payload = {
@@ -895,22 +829,13 @@ def prompts_audit() -> dict[str, Any]:
             "mean": float(degrees.mean()) if n > 0 else 0.0,
             "std": float(degrees.std()) if n > 0 else 0.0,
             "cv": float(degree_cv),
-            "hubs": {
-                "count": hub_count,
-                "fraction": hub_fraction
-            },
-            "tails": {
-                "count": isolated_count,
-                "fraction": tail_fraction
-            }
+            "hubs": {"count": hub_count, "fraction": hub_fraction},
+            "tails": {"count": isolated_count, "fraction": tail_fraction},
         },
-        # Per-node Laplacian diagonal (L_ii = degree of node i). Needed by the
-        # audit frontend to colour/elevate the 3D manifold surface like the
-        # reference Plotly script.
         "degrees": degrees.tolist() if n > 0 else [],
         "spectral_stats": {
             "fiedler_value": float(fiedler_val),
-            "spectral_gap": float(spectral_gap)
+            "spectral_gap": float(spectral_gap),
         },
         "pca_2d": coords_list,
         "pca_explained_variance": explained_variance,
@@ -918,7 +843,6 @@ def prompts_audit() -> dict[str, Any]:
         "build_params": build_params,
         "laplacian_manifold": laplacian_manifold,
     }
-    # Stash on the engine singleton so subsequent calls return instantly.
     try:
         engine._audit_cache = payload
     except AttributeError:
@@ -928,12 +852,6 @@ def prompts_audit() -> dict[str, Any]:
 
 @router.post("/prompts/search", response_model=PromptSearchResponse)
 def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
-    """Run the LEAF semantic search using a pre-computed 768-d nomic embedding.
-
-    Use this endpoint when the caller has already embedded the query (e.g. a
-    long-lived client batch process).  For natural-language queries, prefer
-    POST /api/prompts/nl_search, which embeds the text server-side.
-    """
     engine    = _get_engine()
     query_vec = np.asarray(body.vector, dtype=np.float64)
     try:
@@ -1018,12 +936,18 @@ def _get_drift_engine():
 def drift_health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     """Report readiness of the two CVE period indices.
 
-    Returns the configured paths and whether the engine singleton is built.
-    Does NOT trigger engine initialisation — call GET /api/drift/score or
-    POST /api/drift/search to warm it up.
+    Does NOT trigger engine initialisation. The engine_ready flag simply
+    reflects whether the singleton has already been built (e.g. via startup
+    warm-up or a prior call to /drift/score).
     """
-    from ..drift_engine import CveDriftEngine
-    engine_ready = CveDriftEngine._instance is not None
+    # Guard the import: if pyarrowspace is missing we still want a 200 JSON
+    # response rather than a raw ImportError / 500.
+    engine_ready = False
+    try:
+        from ..drift_engine import CveDriftEngine
+        engine_ready = CveDriftEngine._instance is not None
+    except Exception:
+        pass
     return {
         "status": "ready" if engine_ready else "cold",
         "engine_ready": engine_ready,
@@ -1034,16 +958,6 @@ def drift_health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
 
 @router.get("/drift/lambdas")
 def drift_lambdas() -> dict[str, Any]:
-    """Return eigenvalue distributions for both CVE periods.
-
-    Response shape::
-
-        {
-            "period_a": {"label": "period_a", "lambdas": [...], "n": 128},
-            "period_b": {"label": "period_b", "lambdas": [...], "n": 128},
-            "drift_score": 0.0034
-        }
-    """
     engine = _get_drift_engine()
     return {
         "period_a": {
@@ -1062,12 +976,6 @@ def drift_lambdas() -> dict[str, Any]:
 
 @router.get("/drift/score")
 def drift_score() -> dict[str, Any]:
-    """Return the scalar Wasserstein-1 drift score between the two CVE periods.
-
-    This is the cheapest way to check whether spectral drift is significant
-    after a data reload. The score is recomputed each time the engine is
-    rebuilt (call CveDriftEngine.reset() + this endpoint to refresh).
-    """
     engine = _get_drift_engine()
     return {
         "drift_score": engine.drift_score,
@@ -1085,12 +993,6 @@ def drift_score() -> dict[str, Any]:
 
 @router.post("/drift/search", response_model=DriftSearchResponse)
 def drift_search(body: DriftSearchRequest) -> DriftSearchResponse:
-    """Run the same query vector against both CVE period indices.
-
-    Returns side-by-side spectral search results together with the current
-    drift score, so callers can compare how the same concept is positioned
-    differently in the 1999-2014 vs 2015-2025 CVE embedding spaces.
-    """
     engine    = _get_drift_engine()
     query_vec = np.asarray(body.vector, dtype=np.float64)
     raw       = engine.search_both(query_vec, k=body.k, tau=body.tau)

@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from functools import cached_property, lru_cache
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
@@ -20,8 +20,6 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 log = logging.getLogger(__name__)
 
-# Default paths — resolved relative to the package root so the dev layout
-# (repo/data/cve_embeddings_demo/) works without any env var.
 _DATA_DIR = Path(__file__).parents[2] / "data"
 _CVE_DEMO_DIR = _DATA_DIR / "cve_embeddings_demo"
 
@@ -49,35 +47,18 @@ class Settings(BaseSettings):
 
     data_roots: Annotated[list[str], NoDecode] = Field(default_factory=list)
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
-    # default_window: rows returned by /data when ?limit is omitted.
     default_window: int = 100
-    # max_window: hard cap on the number of *rows* (leading-axis elements)
-    # returned in a single /data or /slice response. Note that for N-D arrays
-    # the total element count is max_window * product(shape[1:]).
     max_window: int = 10_000
     serve_frontend: bool = True
     frontend_dir: str | None = None
-    # Directory where graph-Laplacian Zarr arrays are persisted.
     index_store: str = "./arrowspace_index"
-    # Maximum number of ArrowSpace indices to keep in memory simultaneously.
-    # Oldest entry is evicted when the limit is reached.
     index_cache_size: int = 8
 
-    # ── Prompt search (LEAF Kaban) ───────────────────────────────────────────
-    # Directory that contains dataset.json and nomic_embs/.
-    # Defaults to the `data/` sibling of the package root so the dev layout
-    # (repo/data/) works without any env var.  Set ARRO_SERVER_PROMPT_DATA_DIR
-    # in containers / deployments to point at the mounted data volume.
+    # ── Prompt search (LEAF Kaban) ──────────────────────────────────────────────
     prompt_data_dir: str = str(_DATA_DIR)
-
-    # HuggingFace model id used by EmbedderService.
-    # Override if you want to swap in a different nomic-compatible model.
     embedder_model: str = "nomic-ai/nomic-embed-text-v1.5"
 
     # ── CVE spectral drift (two-period demo) ────────────────────────────────
-    # Paths to the two CVE embedding slices consumed by CveDriftEngine.
-    # Supports both .npy files and .zarr directories.
-    # Override with ARRO_SERVER_CVE_PERIOD_A / ARRO_SERVER_CVE_PERIOD_B.
     cve_period_a: str = str(_CVE_DEMO_DIR / "embs_99_to_14.npy")
     cve_period_b: str = str(_CVE_DEMO_DIR / "embs_15_to_2025.npy")
 
@@ -88,16 +69,18 @@ class Settings(BaseSettings):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
 
-    @cached_property
-    def resolved_roots(self) -> dict[str, Path]:  # type: ignore[override]
+    @property
+    def resolved_roots(self) -> dict[str, Path]:
         """Return mapping of root label -> filesystem path.
 
         Roots may be specified as ``path`` or ``label=path``.
         Unlabeled roots are auto-named after their directory basename, with
         numeric suffixes on collision.
 
-        Cached as a ``cached_property`` — resolved only once per Settings
-        instance, avoiding repeated ``Path.resolve()`` syscalls per request.
+        Implemented as a plain ``@property`` (not ``cached_property``) to
+        avoid the pydantic-settings v2 incompatibility where ``cached_property``
+        descriptors are not stored in ``__dict__`` and can raise
+        ``AttributeError`` on some versions.
         """
         out: dict[str, Path] = {}
         for entry in self.data_roots:
@@ -127,10 +110,7 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the process-wide Settings singleton.
-
-    Use ``get_settings.cache_clear()`` in tests to reset between cases.
-    """
+    """Return the process-wide Settings singleton."""
     s = Settings()
     s.warn_insecure_defaults()
     return s

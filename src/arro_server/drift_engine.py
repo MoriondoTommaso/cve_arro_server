@@ -26,6 +26,7 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -38,7 +39,6 @@ def _wasserstein1d(u: np.ndarray, v: np.ndarray) -> float:
     """
     u_sorted = np.sort(u.astype(np.float64))
     v_sorted = np.sort(v.astype(np.float64))
-    # Interpolate to a common length so the arrays are the same size.
     n = max(len(u_sorted), len(v_sorted))
     u_interp = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(u_sorted)), u_sorted)
     v_interp = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(v_sorted)), v_sorted)
@@ -46,7 +46,19 @@ def _wasserstein1d(u: np.ndarray, v: np.ndarray) -> float:
 
 
 def _load_embeddings(path: str | Path) -> np.ndarray:
-    """Load embeddings from .npy or a Zarr array directory."""
+    """Load embeddings from .npy or a Zarr array directory.
+
+    Zarr stores produced by the CVE pipeline use the layout::
+
+        cve_15_2025.zarr/
+            c/          <- zarr array stored under the 'c' key
+                0.0
+                0.1
+                ...
+
+    We therefore try ``zarr.open_array(p / 'c')`` first, then fall back to
+    opening the root as an array (for stores without the 'c' sub-key).
+    """
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(
@@ -58,23 +70,36 @@ def _load_embeddings(path: str | Path) -> np.ndarray:
         arr = np.load(str(p)).astype(np.float64)
         log.info("Loaded .npy embeddings from %s  shape=%s", p, arr.shape)
         return arr
-    # Zarr directory — try zarr then fall back to numpy memmap
+
+    # Zarr directory
     try:
         import zarr  # type: ignore
-        store = zarr.open(str(p), mode="r")
-        # The array may be stored under a 'c' key (as in cve_15_2025.zarr/c/...)
-        # or directly at root.
-        if hasattr(store, "c"):
-            arr = np.asarray(store["c"], dtype=np.float64)
-        else:
-            arr = np.asarray(store[:], dtype=np.float64)
-        log.info("Loaded zarr embeddings from %s  shape=%s", p, arr.shape)
-        return arr
     except ImportError:
         raise ImportError(
             "zarr is required to load .zarr embedding stores. "
             "Install it with: pip install zarr"
         )
+
+    # Try the canonical CVE layout: array stored under the 'c' sub-key.
+    c_path = p / "c"
+    if c_path.exists():
+        try:
+            arr = np.asarray(zarr.open_array(str(c_path), mode="r")[:], dtype=np.float64)
+            log.info("Loaded zarr embeddings (c/) from %s  shape=%s", p, arr.shape)
+            return arr
+        except Exception as exc:
+            log.debug("zarr open_array on 'c' sub-key failed (%s), trying root", exc)
+
+    # Fallback: root is directly a zarr array.
+    try:
+        arr = np.asarray(zarr.open_array(str(p), mode="r")[:], dtype=np.float64)
+        log.info("Loaded zarr embeddings (root) from %s  shape=%s", p, arr.shape)
+        return arr
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not load zarr store at {p}: {exc}. "
+            "Expected either a plain zarr array or a group with a 'c' array sub-key."
+        ) from exc
 
 
 def _build_arrowspace(arr: np.ndarray, label: str) -> Any:
@@ -124,7 +149,7 @@ class CveDriftEngine:
         Higher = more spectral drift between periods.
     """
 
-    _instance: CveDriftEngine | None = None
+    _instance: "CveDriftEngine | None" = None
     _lock: threading.Lock = threading.Lock()
 
     def __init__(self, period_a: _PeriodIndex, period_b: _PeriodIndex) -> None:
