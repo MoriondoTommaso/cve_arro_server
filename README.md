@@ -1,261 +1,203 @@
-# arro-server
+# cve-arro-server — CVE Spectral Drift Demo
 
-FastAPI server that exposes large datasets stored as **Zarr v3** trees and
-their **ArrowSpace** graph-Laplacian index over HTTP.
-
-Also contains the **LEAF Kaban** semantic search backend: a natural-language
-prompt search engine built on [nomic-embed-text-v1.5](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5),
-ArrowSpace spectral indexing, and MMR reranking with salience boosting.
+> **Demo for Reply data scientists** — uses the CVE corpus to illustrate
+> **spectral drift monitoring** with ArrowSpace graph-Laplacian indices.
+> Two time periods (1999-2014 vs 2015-2025) are compared through their
+> eigenvalue distributions; drift is quantified as a Wasserstein-1 distance
+> and served as a live REST API.
 
 ---
 
-## Install
+## What is spectral drift?
 
-```bash
-uv venv && uv sync
+Every embedding corpus has a **graph-Laplacian spectrum** — a distribution
+of eigenvalues derived from the k-NN connectivity of the data manifold.
+When the corpus changes over time (new topics, new vocabulary, shifted
+semantics) the spectral distribution shifts too.
 
-# API server only (no NL embedding, no notebook deps)
-pip install -e .
-
-# + NL search layer (sentence-transformers + torch)
-pip install -e '.[nlp]'
-
-# + Jupyter / demo notebook dependencies
-pip install -e '.[notebook]'
-
-# + dev / test toolchain
-pip install -e '.[dev]'
-
-# Everything at once
-pip install -e '.[full]'
+This server exposes that shift as a **live, queryable signal**:
 
 ```
+CVE embeddings (Period A: 1999-2014)   →  ArrowSpace index  →  λ-distribution A ──┐
+                                                                                    ├──▶  W₁ drift score
+CVE embeddings (Period B: 2015-2025)   →  ArrowSpace index  →  λ-distribution B ──┘
+```
 
-> **uv users:** replace `pip install` with `uv pip install` throughout.
-
-> **Before building the wheel** (`hatch build` / `pip install -e .`) make sure
-> the `frontend/` directory exists — hatchling raises `FileNotFoundError`
-> otherwise: `mkdir -p frontend`
+A higher Wasserstein-1 (W₁) score means the two periods differ more in their
+manifold geometry — i.e., the semantic neighbourhood structure of CVE
+descriptions has drifted significantly.
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. install
-uv pip install -e '.[dev]'
+# 1. clone & install
+git clone https://github.com/MoriondoTommaso/cve_arro_server.git
+cd cve_arro_server
+uv venv && uv sync
+uv pip install -e '.[full]'
 
-# 2. generate sample Zarr data (optional)
-uv run scripts/make_example_data.py
+# 2. place CVE embedding files (see data/README.md)
+#    data/cve_embeddings_demo/embs_99_to_14.npy
+#    data/cve_embeddings_demo/embs_15_to_2025.npy
 
-# 3. configure
-export ARRO_SERVER_DATA_ROOTS="main=$(pwd)/example_data"
-export ARRO_SERVER_PROMPT_DATA_DIR="$(pwd)/data"
+# 3. run the standalone drift script (no server needed)
+uv run python scripts/compute_drift.py
 
-# 4. serve
+# 4. start the API server
 uv run src/arro_server
-# Swagger UI: http://localhost:8000/docs
-# Dataset UI: http://localhost:8000/ui
-
+# → http://localhost:8000/docs
 ```
+
+---
+
+## Drift endpoints
+
+| Method | Route | Purpose |
+|--------|-------|--------|
+| `GET` | `/api/drift/health` | Are both period indices built and ready? |
+| `GET` | `/api/drift/score` | Scalar W₁ drift score + interpretation label |
+| `GET` | `/api/drift/lambdas` | Full eigenvalue arrays for both periods |
+| `POST` | `/api/drift/search` | Side-by-side spectral search across both periods |
+
+### Example — check drift score
+
+```bash
+curl http://localhost:8000/api/drift/score
+```
+
+```jsonc
+{
+  "drift_score": 0.0412,
+  "period_a": "period_a",
+  "period_b": "period_b",
+  "period_a_n_lambdas": 200,
+  "period_b_n_lambdas": 200,
+  "interpretation": "medium"
+}
+```
+
+### Example — side-by-side search
+
+```bash
+curl -X POST http://localhost:8000/api/drift/search \
+  -H 'Content-Type: application/json' \
+  -d '{"vector": [/* 384 floats */], "k": 5, "tau": 0.5}'
+```
+
+Returns matched CVEs from **both periods** for the same query vector, so you
+can directly compare what a model would retrieve from the old vs. the new
+corpus.
+
+---
+
+## Notebooks
+
+| Notebook | Purpose |
+|----------|---------|
+| [`notebooks/cve_spectral_drift.ipynb`](notebooks/cve_spectral_drift.ipynb) | **Primary demo** — standalone spectral analysis, KDE overlay, drift metrics, live API calls |
+| [`notebooks/cve_drift_monitoring.ipynb`](notebooks/cve_drift_monitoring.ipynb) | Yearly sweep — tracks W₁, spectral gap, and CVE volume across all years |
+| [`notebooks/cve.ipynb`](notebooks/cve.ipynb) | Data preparation — raw NVD → parquet → embeddings |
+
+---
+
+## Configuration
+
+All variables prefixed `ARRO_SERVER_`. Can be set in `.env`.
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `ARRO_SERVER_CVE_PERIOD_A` | `data/cve_embeddings_demo/embs_99_to_14.npy` | Period A embedding file (`.npy` or `.zarr`) |
+| `ARRO_SERVER_CVE_PERIOD_B` | `data/cve_embeddings_demo/embs_15_to_2025.npy` | Period B embedding file |
+| `ARRO_SERVER_DATA_ROOTS` | `[]` | Zarr roots for `/api/datasets/*` |
+| `ARRO_SERVER_PROMPT_DATA_DIR` | `data/` | LEAF Kaban prompt corpus directory |
+| `ARRO_SERVER_EMBEDDER_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | HuggingFace model ID |
+| `ARRO_SERVER_CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `ARRO_SERVER_MAX_WINDOW` | `10000` | Hard cap on per-request elements |
+
+See `.env.example` for a ready-to-copy template.
 
 ---
 
 ## Project layout
 
 ```
-src/arro_server/
-  app.py                  # FastAPI application factory + lifespan warmup
-  settings.py             # pydantic-settings configuration
-  slicing.py              # numpy-style slice/window parsing
-  errors.py               # HTTPException subclasses
-  arrowspace_adapter.py   # pyarrowspace + sidecar JSON adapters
-  search_engine.py        # PromptSearchEngine (ArrowSpace + MMR + salience)
-  embedder.py             # EmbedderService (nomic-embed-text-v1.5)
-  storage/
-    base.py               # StorageBackend protocol
-    zarr_fs.py            # filesystem Zarr v3 backend
-    registry.py           # multi-backend multiplexer
-  api/
-    routes.py             # /api/* endpoints
-    schemas.py            # Pydantic request/response models
-    serializers.py        # ndarray -> JSON helpers
-frontend/                 # vanilla HTML/CSS/JS viewer (create dir if missing)
-notebooks/                # search_engine_demo.ipynb + tuner results
-tests/                    # pytest suite
-scripts/make_example_data.py
-Containerfile
-compose.yaml
-
+cve_arro_server/
+├── data/
+│   ├── README.md                         ← data setup instructions
+│   ├── cve_embeddings_demo/
+│   │   ├── embs_99_to_14.npy             ← Period A embeddings (not tracked in git)
+│   │   └── embs_15_to_2025.npy           ← Period B embeddings (not tracked in git)
+│   ├── cve_zarr/
+│   │   ├── cve_99_2014.zarr/             ← Optional Zarr source for Period A
+│   │   └── cve_15_2025.zarr/             ← Optional Zarr source for Period B
+│   └── results/                          ← Notebook outputs (plots, CSVs)
+├── notebooks/
+│   ├── cve_spectral_drift.ipynb          ← Primary drift demo
+│   ├── cve_drift_monitoring.ipynb        ← Yearly monitoring sweep
+│   └── cve.ipynb                         ← Data preparation
+├── scripts/
+│   └── compute_drift.py                  ← Standalone drift script (no server needed)
+├── src/arro_server/
+│   ├── app.py
+│   ├── drift_engine.py                   ← CveDriftEngine singleton
+│   ├── settings.py
+│   └── api/
+│       ├── routes.py                     ← /api/drift/* endpoints
+│       └── schemas.py
+├── Containerfile
+├── compose.yaml
+└── pyproject.toml
 ```
 
 ---
 
-## Endpoints
-
-All routes live under `/api`. Dataset IDs use `<root_label>/<path>`.
-
-### Dataset (Zarr) routes
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/health` | Liveness + optional dep status + engine readiness |
-| `GET` | `/api/datasets` | List discovered datasets |
-| `GET` | `/api/datasets/{id}/metadata` | Shape, dtype, chunks, attrs |
-| `GET` | `/api/datasets/{id}/data?offset=0&limit=100` | Row-window over leading axis |
-| `GET` | `/api/datasets/{id}/slice?spec=0:10,2:5` | NumPy-style multi-axis slice |
-| `GET` | `/api/datasets/{id}/manifold` | ArrowSpace manifold JSON |
-| `GET` | `/api/datasets/{id}/stats` | Basic + ArrowSpace statistics |
-| `GET` | `/api/datasets/{id}/search?q=...` | Keyword search (sidecar or pyarrowspace) |
-| `POST` | `/api/datasets/{id}/index` | Build ArrowSpace graph-Laplacian index |
-| `GET` | `/api/datasets/{id}/lambdas` | Eigenvalue distribution |
-| `GET` | `/api/datasets/{id}/graph_laplacian` | Graph-Laplacian metadata |
-| `GET` | `/api/datasets/{id}/items` | All indexed items |
-| `GET` | `/api/datasets/{id}/items/{n}` | Single indexed item |
-| `POST` | `/api/datasets/{id}/search` | Spectral vector search |
-| `POST` | `/api/datasets/{id}/search/energy` | Energy vector search |
-| `POST` | `/api/datasets/{id}/search/hybrid` | Hybrid (spectral + linear) search |
-| `POST` | `/api/datasets/{id}/search/linear` | Linear sorted search |
-| `POST` | `/api/datasets/{id}/search/batch` | Batch spectral search |
-| `GET` | `/api/datasets/{id}/spot/motives/eigen` | Eigen motives |
-| `GET` | `/api/datasets/{id}/spot/motives/energy` | Energy motives |
-| `GET` | `/api/datasets/{id}/spot/subgraphs/centroids` | Subgraph centroids |
-| `GET` | `/api/datasets/{id}/spot/subgraphs/motives` | Subgraph motives |
-
-### LEAF Kaban — Prompt search routes
-
-| Method | Route | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/prompts/health` | Engine + embedder readiness |
-| `GET` | `/api/prompts/warm` | Confirm index is hot; returns index stats |
-| `GET` | `/api/prompts/lambdas` | Eigenvalue distribution for prompt corpus |
-| `GET` | `/api/prompts/graph_laplacian` | Graph-Laplacian metadata for prompt corpus |
-| `GET` | `/api/prompts/audit` | Degree stats + Fiedler value + PCA 2D scatter |
-| `POST` | `/api/prompts/search` | Semantic search — caller supplies 768-d vector |
-| `POST` | `/api/prompts/nl_search` | **Primary frontend endpoint** — plain-text query, server embeds it |
-
-#### `POST /api/prompts/nl_search` — example
+## Install options
 
 ```bash
-curl -X POST http://localhost:8000/api/prompts/nl_search \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "write a Python function that sorts a list", "k": 5}'
-
+uv pip install -e .              # server only
+uv pip install -e '.[nlp]'       # + NL embedding (sentence-transformers + torch)
+uv pip install -e '.[notebook]'  # + Jupyter / matplotlib / scikit-learn
+uv pip install -e '.[full]'      # everything
 ```
 
-```jsonc
-{
-  "query": "write a Python function that sorts a list",
-  "k": 5,
-  "tau": 0.75,
-  "lam": 0.7,
-  "result_count": 5,
-  "results": [
-    {
-      "id": "pk_00042",
-      "title": "Python sorting helper",
-      "content": "Write a Python function that ...",
-      "tags": ["python", "sorting"],
-      "score": 0.912,
-      "salience": 0.741,
-      "tau": 0.75
-    }
-    // ... 4 more
-  ]
-}
-
-```
-
-#### `POST /api/prompts/search` — request body
-
-```jsonc
-{
-  "vector": [0.012, -0.034, /* ... 768 floats total */],
-  "k": 10,       // results (1–100, default 10)
-  "tau": 0.75,   // spectral sharpness — 0=broad, 5=sharp (default 0.75)
-  "alpha": 0.6,  // cosine vs spectral blend (default 0.6)
-  "lam": 0.7     // MMR diversity — 1.0=pure relevance, 0.0=max diversity (default 0.7)
-}
-
-```
+> **uv users:** `uv pip install` is equivalent to `pip install` inside a uv venv.
 
 ---
 
-## Configuration
+## How the drift engine works
 
-All variables are prefixed `ARRO_SERVER_` and can also be set in a `.env` file.
+```
+settings.cve_period_a / cve_period_b
+        │
+        ▼
+_load_embeddings()          reads .npy or .zarr (auto-detects 'c/' sub-key)
+        │  np.ndarray  (N × D)
+        ▼
+_build_arrowspace()         ArrowSpaceBuilder.build(arr)
+        │  ArrowSpace object
+        ▼
+_extract_lambdas()          aspace.lambdas()  →  List[float]
+        │
+        ▼
+_wasserstein1d(λ_A, λ_B)    closed-form 1-D EMD on sorted arrays
+        │  float
+        ▼
+CveDriftEngine.drift_score
+```
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `ARRO_SERVER_DATA_ROOTS` | `[]` | Comma-separated `path` or `label=path` entries |
-| `ARRO_SERVER_PROMPT_DATA_DIR` | — | Directory containing `dataset.json` and `nomic_embs/`. **Required for LEAF Kaban.** |
-| `ARRO_SERVER_FRONTEND_DIR` | `None` | Explicit path to the `frontend/` directory. Required in Docker deployments (e.g., `/app/frontend`). |
-| `ARRO_SERVER_EMBEDDER_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | HuggingFace model ID used by the `EmbedderService`. Override to swap Nomic models. |
-| `ARRO_SERVER_INDEX_STORE` | `./arrowspace_index` | Directory where graph-Laplacian Zarr arrays are persisted. |
-| `ARRO_SERVER_CORS_ORIGINS` | `*` | Comma-separated allowed origins. Set explicitly in production. |
-| `ARRO_SERVER_DEFAULT_WINDOW` | `100` | Default `/data` page size |
-| `ARRO_SERVER_MAX_WINDOW` | `10000` | Hard cap on per-request elements |
-| `ARRO_SERVER_SERVE_FRONTEND` | `true` | Mount `frontend/` at `/ui` |
-| `ARRO_SERVER_HOST` | `0.0.0.0` | Uvicorn bind host |
-| `ARRO_SERVER_PORT` | `8000` | Uvicorn bind port |
-| `ARRO_SERVER_RELOAD` | `false` | Uvicorn hot-reload (dev only) |
-
-See `.env.example` for a ready-to-copy template.
+The singleton is built lazily on the first request (or eagerly at startup
+via the FastAPI lifespan). Both period indices stay in memory for fast
+side-by-side search.
 
 ---
 
-## ArrowSpace integration
+## LEAF Kaban prompt search (original feature)
 
-`arrowspace_adapter.py` picks the best backend at runtime:
-
-1. **`pyarrowspace`** if importable (preferred).
-2. **Sidecar JSON** under `<dataset>/_arrowspace/` (`manifold.json`, `stats.json`, `index.json`) — works without the package.
-
-The sidecar layout means a dataset can advertise ArrowSpace metadata even when the Python package is unavailable.
-
----
-
-## LEAF Kaban — how it works
-
-```
-User NL query
-     │
-     ▼
-EmbedderService          (nomic-embed-text-v1.5 via sentence-transformers)
-     │  768-d float64 vector
-     ▼
-PromptSearchEngine
-  ├─ ArrowSpace spectral search   (graph-Laplacian tau-mode)
-  │    returns top-3k candidates with cosine scores
-  └─ MMR reranker                 (diversity + salience boost)
-       salience = f(upvotes, likes, author_reputation, views)
-       returns top-k final results
-     │
-     ▼
-PromptSearchResponse     (typed Pydantic, score/salience/tau per result)
-
-```
-
-**Startup warmup:** both `EmbedderService` and `PromptSearchEngine` are
-initialised at server startup inside the FastAPI lifespan. If
-`ARRO_SERVER_PROMPT_DATA_DIR` is not set the server still boots — prompt
-routes return `503` until the data dir is configured and the server restarted.
-
----
-
-## Pre-commit / linting
-
-```bash
-# install the hook once after cloning
-uv run pre-commit install
-
-# run manually across the whole tree
-uv run pre-commit run --all-files
-
-```
-
-Every `git commit` runs `ruff check --fix` then `ruff format`. Settings live
-in `[tool.ruff]` inside `pyproject.toml`.
+The repo also contains the LEAF Kaban semantic prompt search backend.
+See the original [LEAF Prompt-Kaban POC](https://github.com/Genefold/arro-server)
+for full documentation on `/api/prompts/*` endpoints.
 
 ---
 
@@ -263,113 +205,12 @@ in `[tool.ruff]` inside `pyproject.toml`.
 
 ```bash
 pytest -q
-
 ```
-
-Covers settings parsing, slice resolution, dataset listing, metadata,
-windowed reads, slice reads, manifold/stats/search via sidecar adapter, and
-graceful error paths. Tests requiring `zarr` are skipped automatically when
-the package is not installed.
 
 ---
 
-## Containers
+## License
 
-The image bundles the demo prompt corpus (`embeddings_nomic_structured_768d_raw.zarr`
-
-* `notebooks/db.json`), so it boots a working `/api/prompts/*` demo with no
-volume mounts.
-
-```bash
-# Build (multi-stage: ~3 GB final image — most of it is torch CPU + transformers)
-docker build -t arro-server -f Containerfile .
-
-# Run — the demo data is already inside the image
-docker run --rm -p 8000:8000 arro-server
-
-```
-
-Then open:
-
-| URL | Purpose |
-| --- | --- |
-| http://localhost:8000/ | API root (JSON service banner) |
-| http://localhost:8000/ui/ | LEAF Kaban frontend (search + audit) — `/ui` also works (redirects) |
-| http://localhost:8000/docs | Swagger UI |
-| http://localhost:8000/api/health | Liveness / readiness |
-| http://localhost:8000/api/prompts/audit | Spectral audit payload |
-
-### Compose
-
-```bash
-docker compose up --build
-# or, to expose your own Zarr root at /api/datasets/main/...:
-DATA_DIR=$(pwd)/example_data docker compose up --build
-
-```
-
-### Skip the NLP stack
-
-The torch + sentence-transformers wheels are large (~1 GB). If you only need
-the dataset and audit endpoints (no `nl_search`), build with:
-
-```bash
-docker build --build-arg INSTALL_NLP=0 -t arro-server -f Containerfile .
-# or
-INSTALL_NLP=0 docker compose up --build
-
-```
-
-In this mode `/api/prompts/nl_search` returns 503 but `/search`, `/audit`,
-and all `/api/datasets/*` routes still work.
-
-### First-run model download
-
-The first call to `/api/prompts/nl_search` downloads the embedder model
-(`nomic-ai/nomic-embed-text-v1.5`, ~250 MB) from HuggingFace. The compose
-file persists this download in the `arro-hf-cache` named volume so subsequent
-container restarts are warm. With plain `docker run` use
-`-v arro-hf-cache:/app/.cache/huggingface` to keep the same behaviour.
-
-### Useful environment variables
-
-| Variable | Default in container | Purpose |
-| --- | --- | --- |
-| `ARRO_SERVER_PROMPT_DATA_DIR` | `/app/data` | Where the engine looks for `nomic_embs/*.npy`. Falls back to the bundled Zarr in the image. |
-| `ARRO_SERVER_FRONTEND_DIR` | `/app/frontend` (compose) | Tells the server exactly where the UI files are located inside the container. Fixes the `404 Not Found` error for the `/ui` route. |
-| `ARRO_SERVER_DATA_ROOTS` | `main=/data` (compose) | Comma-separated Zarr roots for `/api/datasets/*`. |
-| `ARRO_SERVER_CORS_ORIGINS` | `*` | Restrict to your frontend origin in production. |
-| `ARRO_SERVER_SERVE_FRONTEND` | `true` | Mount the bundled `frontend/` at `/ui/` (also reachable as `/ui`). |
-| `ARRO_SERVER_MAX_WINDOW` | `25000` (compose) | Row cap for `/data` / `/slice` responses. Bumped above the library default (10,000) so the bundled 20,000×768 demo corpus fits a single index build. |
-| `ARRO_SERVER_PORT` | `8000` | Container-internal port; remap on the host with `-p`. |
-| `HF_HOME` | `/app/.cache/huggingface` | HuggingFace cache root (model weights). The compose file mounts a named volume here so downloads survive rebuilds. |
-
----
-
-## Extending
-
-* **New storage backends** (S3/GCS, Parquet, Iceberg): implement
-`storage.base.StorageBackend` and register in `storage.registry.get_registry()`.
-* **Larger payloads**: add Arrow IPC / Parquet response branches in
-`api/serializers.py` and a content-type negotiator in `api/routes.py`.
-* **Auth**: add a `Depends` guard on every route or wrap the router in
-middleware. The scaffold is deliberately auth-free.
-* **Different embedding model**: swap the model name in `embedder.py` —
-update `_DIM` in `search_engine.py` to match the new output dimension.
-
----
-
-## Scope and limitations
-
-* Data responses are JSON previews — fine for windowed spreadsheet browsing,
-unsuitable for very wide rows or huge slices. Element budget is enforced
-via `ARRO_SERVER_MAX_WINDOW`.
-* Group datasets are listed but not directly readable through `/data` or
-`/slice`; address their member arrays by ID.
-* The sidecar keyword search is a naive substring match. Use
-`/api/prompts/nl_search` for semantic search over the prompt corpus.
-* NL search requires `pip install 'arro-server[nlp]'` and ~2 GB for the
-torch wheels. A CPU-only install is supported:
-```bash
-pip install 'arro-server[nlp]' --extra-index-url [https://download.pytorch.org/whl/cpu](https://download.pytorch.org/whl/cpu)
-
+Apache 2.0 — see [LICENSE](LICENSE).
+Based on [Genefold/arro-server](https://github.com/Genefold/arro-server), © 2026 GENEFOLD AI LTD.
+Modifications by Tommaso Moriondo.
