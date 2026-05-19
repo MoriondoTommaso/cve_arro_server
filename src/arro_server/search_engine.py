@@ -1,15 +1,7 @@
 # MODIFIED FILE
 # Original source: Genefold/arro-server (https://github.com/Genefold/arro-server)
 # Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
-# Modifications by Tommaso Moriondo for the CVE drift demo:
-#   - Ported from Prompt-Kaban POC -> CVE corpus
-#   - Fixed 5 bugs (see inline NOTE comments)
-#   - Removed MMR re-ranking and salience weighting
-#   - Pure ArrowSpace spectral search only
-#   - Zarr fallback for embedding load when .npy files are absent
-# Fix: settings.data_dir -> settings.prompt_data_dir (field was renamed
-#      in settings.py; this caused 503 on every /api/prompts/* call)
-# Fix: _load_dataset path & id normalisation so content is never empty
+# Modifications by Tommaso Moriondo for the CVE drift demo
 from __future__ import annotations
 
 import json
@@ -22,14 +14,10 @@ import polars as pl
 
 log = logging.getLogger(__name__)
 
-# Keys that ArrowSpaceBuilder.build() accepts at graph-construction time.
-# tau is a query-time parameter and must NEVER be passed to build().
 _BUILD_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
 _DIM = 384
 DEFAULT_TAU = 0.7
 
-# Hardcoded fallback params used when tuner results are absent (fresh clone / CI).
-# Values from the tuner run in search_engine_demo.ipynb cell 22.
 _DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "sigma": None}
 
 
@@ -38,12 +26,6 @@ _DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "si
 # ---------------------------------------------------------------------------
 
 def _load_best_params(data_dir: Path) -> dict:
-    """Load graph build params from the latest tuner run.
-
-    Falls back to _DEFAULT_BUILD_PARAMS when the tuner output directory is
-    missing (fresh clone, container, CI). tau is stripped because it is a
-    query-time parameter and must not be passed to ArrowSpaceBuilder.build().
-    """
     tuner_dir = data_dir.parent / "notebooks" / "results" / "arrowspace_tuner"
     try:
         candidates = sorted(tuner_dir.iterdir())
@@ -61,77 +43,25 @@ def _load_best_params(data_dir: Path) -> dict:
     except (FileNotFoundError, IndexError, KeyError, ValueError, json.JSONDecodeError) as exc:
         log.warning(
             "Tuner results unavailable (%s) — using hardcoded defaults: %s",
-            exc,
-            _DEFAULT_BUILD_PARAMS,
+            exc, _DEFAULT_BUILD_PARAMS,
         )
         return dict(_DEFAULT_BUILD_PARAMS)
 
 
-def _load_embeddings(data_dir: Path) -> tuple[np.ndarray, list[str]]:
-    """Load corpus embeddings and ids, preferring .npy then falling back to Zarr.
-
-    Resolution order
-    ----------------
-    1. data_dir/cve_embeddings_demo/embs_99_to_25.npy  (+ ids_99_to_25.npy)
-    2. data_dir/cve_zarr/cve_99_25.zarr
-    """
-    npy_embs = data_dir / "cve_embeddings_demo" / "embs_99_to_25.npy"
-    npy_ids  = data_dir / "cve_embeddings_demo" / "ids_99_to_25.npy"
-
-    if npy_embs.exists() and npy_ids.exists():
-        embs = np.load(npy_embs).astype(np.float64)
-        ids  = list(np.load(npy_ids, allow_pickle=True))
-        log.info("Loaded embeddings from .npy: %s (shape=%s)", npy_embs, embs.shape)
-        return embs, [str(x) for x in ids]
-
-    # Zarr fallback
-    repo_root = data_dir.parent if data_dir.name == "data" else data_dir
-    zarr_path = repo_root / "cve_zarr" / "cve_99_25.zarr"
-    if not zarr_path.exists():
-        alt = data_dir / "cve_zarr" / "cve_99_25.zarr"
-        if alt.exists():
-            zarr_path = alt
-        else:
-            raise FileNotFoundError(
-                "CveSearchEngine: no embeddings found. Looked for:\n"
-                f"  - {npy_embs}\n"
-                f"  - {zarr_path}\n"
-                f"  - {alt}\n"
-                "Set ARRO_SERVER_PROMPT_DATA_DIR to a directory containing cve_embeddings_demo/"
-            )
-
-    try:
-        import zarr as _zarr
-    except ImportError as exc:
-        raise RuntimeError(
-            "zarr is required for the .zarr fallback; pip install 'zarr>=3.0'"
-        ) from exc
-
-    arr  = _zarr.open_array(str(zarr_path), mode="r")
-    embs = np.asarray(arr[:], dtype=np.float64)
-
-    if npy_ids.exists():
-        ids = [str(x) for x in np.load(npy_ids, allow_pickle=True)]
-    else:
-        n = embs.shape[0]
-        ids = [f"cve_{i:05d}" for i in range(n)]
-        log.warning("ids .npy not found — generated %d sequential ids", n)
-
-    log.info("Loaded embeddings from Zarr fallback: %s (shape=%s)", zarr_path, embs.shape)
-    return embs, ids
-
-
 def _find_parquet(data_dir: Path) -> Path | None:
-    """Locate cve_corpus.parquet trying several layout variants.
+    """Locate cve_corpus.parquet across all known layout variants.
 
-    Layout variants supported:
-      data_dir/cve_embs/cve_corpus.parquet          (primary)
+    Variants tried (in order):
+      data_dir/cve_embs/cve_corpus.parquet           <- ARRO_SERVER_PROMPT_DATA_DIR=data/data
+      data_dir/data/cve_embs/cve_corpus.parquet      <- ARRO_SERVER_PROMPT_DATA_DIR=data   (double-data)
+      data_dir/../data/cve_embs/cve_corpus.parquet   <- ARRO_SERVER_PROMPT_DATA_DIR=repo root
       data_dir/cve_embeddings_demo/cve_corpus.parquet
-      data_dir/cve_corpus.parquet                   (flat)
-    Returns None if not found anywhere.
+      data_dir/cve_corpus.parquet                    <- flat
     """
     candidates = [
         data_dir / "cve_embs" / "cve_corpus.parquet",
+        data_dir / "data" / "cve_embs" / "cve_corpus.parquet",
+        data_dir.parent / "data" / "cve_embs" / "cve_corpus.parquet",
         data_dir / "cve_embeddings_demo" / "cve_corpus.parquet",
         data_dir / "cve_corpus.parquet",
     ]
@@ -139,31 +69,30 @@ def _find_parquet(data_dir: Path) -> Path | None:
         if p.exists():
             log.info("Found CVE corpus parquet at %s", p)
             return p
+    log.warning(
+        "CVE corpus parquet not found. Tried:\n%s",
+        "\n".join(f"  - {p}" for p in candidates),
+    )
     return None
 
 
 def _load_dataset(data_dir: Path) -> dict[str, str]:
-    """Load CVE corpus parquet and return a {cve_id: text} mapping.
-
-    IDs are normalised to uppercase (CVE-YYYY-NNNNN) so they always match
-    the ids produced by _load_embeddings regardless of case.
-
-    Returns an empty dict if the file is absent (non-fatal: search still works
-    but result dicts will have empty content fields).
-    """
+    """Load {cve_id -> text} from parquet. IDs normalised to uppercase."""
     dataset_path = _find_parquet(data_dir)
     if dataset_path is None:
-        log.warning(
-            "CVE corpus parquet not found in %s (tried cve_embs/, cve_embeddings_demo/, ./) "
-            "— content fields will be empty until the parquet is present.",
-            data_dir,
-        )
         return {}
     try:
+        # Select only the two text columns — skip 'embedding' (large float array)
         lazy_df = pl.scan_parquet(dataset_path)
-        df = lazy_df.select(["cve_id", "text"]).collect()
-        # Normalise IDs to uppercase so .npy IDs (e.g. 'CVE-2021-1234') and
-        # parquet IDs always hit the same key.
+        schema_names = lazy_df.collect_schema().names()
+        cols = [c for c in ("cve_id", "text") if c in schema_names]
+        if len(cols) < 2:
+            log.error(
+                "Parquet at %s is missing required columns. Found: %s",
+                dataset_path, schema_names,
+            )
+            return {}
+        df = lazy_df.select(cols).collect()
         return {
             str(k).upper(): str(v)
             for k, v in zip(df["cve_id"].to_list(), df["text"].to_list())
@@ -173,42 +102,107 @@ def _load_dataset(data_dir: Path) -> dict[str, str]:
         return {}
 
 
+def _load_embeddings_from_parquet(parquet_path: Path) -> tuple[np.ndarray, list[str]]:
+    """Load embeddings and ids directly from the corpus parquet.
+
+    Used as a last-resort fallback when .npy and .zarr files are absent.
+    Requires columns: 'embedding' (list<float>) and 'cve_id' (str).
+    """
+    log.info("Loading embeddings from parquet fallback: %s", parquet_path)
+    df = pl.read_parquet(parquet_path, columns=["cve_id", "embedding"])
+    ids  = [str(x).upper() for x in df["cve_id"].to_list()]
+    embs = np.array(df["embedding"].to_list(), dtype=np.float64)
+    log.info("  parquet embeddings shape: %s", embs.shape)
+    return embs, ids
+
+
+def _load_embeddings(data_dir: Path) -> tuple[np.ndarray, list[str]]:
+    """Load corpus embeddings and ids.
+
+    Resolution order
+    ----------------
+    1. data_dir/cve_embeddings_demo/embs_99_to_25.npy  (+ ids_99_to_25.npy)
+    2. data_dir/cve_zarr/cve_99_25.zarr
+    3. cve_corpus.parquet  (via _find_parquet — has 'embedding' column)
+    """
+    npy_embs = data_dir / "cve_embeddings_demo" / "embs_99_to_25.npy"
+    npy_ids  = data_dir / "cve_embeddings_demo" / "ids_99_to_25.npy"
+
+    if npy_embs.exists() and npy_ids.exists():
+        embs = np.load(npy_embs).astype(np.float64)
+        # allow_pickle=True required: id arrays are saved as object/str dtype
+        ids  = list(np.load(npy_ids, allow_pickle=True))
+        log.info("Loaded embeddings from .npy (shape=%s)", embs.shape)
+        return embs, [str(x).upper() for x in ids]
+
+    # Zarr fallback
+    zarr_candidates = [
+        data_dir / "cve_zarr" / "cve_99_25.zarr",
+        data_dir.parent / "cve_zarr" / "cve_99_25.zarr",
+    ]
+    for zarr_path in zarr_candidates:
+        if zarr_path.exists():
+            try:
+                import zarr as _zarr
+            except ImportError as exc:
+                raise RuntimeError("pip install 'zarr>=3.0'") from exc
+            arr  = _zarr.open_array(str(zarr_path), mode="r")
+            embs = np.asarray(arr[:], dtype=np.float64)
+            if npy_ids.exists():
+                ids = [str(x).upper() for x in np.load(npy_ids, allow_pickle=True)]
+            else:
+                ids = [f"CVE_{i:05d}" for i in range(embs.shape[0])]
+            log.info("Loaded embeddings from Zarr (shape=%s)", embs.shape)
+            return embs, ids
+
+    # Parquet fallback — parquet already contains the embedding column
+    parquet_path = _find_parquet(data_dir)
+    if parquet_path is not None:
+        try:
+            return _load_embeddings_from_parquet(parquet_path)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Parquet embedding fallback failed: %s", exc)
+
+    raise FileNotFoundError(
+        "CveSearchEngine: no embeddings found. Provide one of:\n"
+        f"  - {npy_embs} (+ ids_99_to_25.npy)\n"
+        "  - data/cve_zarr/cve_99_25.zarr\n"
+        "  - data/data/cve_embs/cve_corpus.parquet  (must have 'embedding' column)\n"
+        "Set ARRO_SERVER_PROMPT_DATA_DIR correctly."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
 
 class CveSearchEngine:
-    """Singleton that holds the ArrowSpace index and exposes CVE semantic search.
-
-    Pure spectral search via ArrowSpace taumode — no re-ranking layer.
-    The data directory is resolved from Settings.prompt_data_dir so the engine
-    works correctly both in dev layout and inside containers.
-    """
+    """Singleton — ArrowSpace spectral search over the CVE corpus."""
 
     _instance: "CveSearchEngine | None" = None
 
     def __init__(self, data_dir: Path) -> None:
-        # 1. Embeddings + ids (.npy -> Zarr fallback)
         self.embs, self.ids = _load_embeddings(data_dir)
-
-        # Normalise ids to uppercase so _meta lookup always hits
-        self.ids = [str(i).upper() for i in self.ids]
-
-        # 2. CVE text corpus — {cve_id: text} lookup, built once at startup
         self._meta: dict[str, str] = _load_dataset(data_dir)
 
-        # 3. Build ArrowSpace graph-Laplacian index
+        log.info(
+            "CveSearchEngine: %d embeddings, %d meta entries loaded.",
+            len(self.ids), len(self._meta),
+        )
+        if self._meta:
+            overlap = sum(1 for i in self.ids if i in self._meta)
+            log.info(
+                "  ID overlap (embs ∩ meta): %d / %d (%.1f%%)",
+                overlap, len(self.ids), 100 * overlap / len(self.ids),
+            )
+
         build_params = _load_best_params(data_dir)
         self.aspace, self.gl = ArrowSpaceBuilder().build(build_params, self.embs)
-
-        # 4. Audit cache — populated lazily on first /api/cve/audit
         self._audit_cache: dict | None = None
-
         CveSearchEngine._instance = self
 
     @classmethod
     def get(cls) -> "CveSearchEngine":
-        """Return (or lazily create) the singleton instance."""
         if cls._instance is None:
             from .settings import get_settings
             settings = get_settings()
@@ -217,12 +211,7 @@ class CveSearchEngine:
 
     @classmethod
     def reset(cls) -> None:
-        """Clear the singleton. For tests and hot-reload scenarios."""
         cls._instance = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def search(
         self,
@@ -230,46 +219,28 @@ class CveSearchEngine:
         tau: float = DEFAULT_TAU,
         k: int = 10,
     ) -> list[dict]:
-        """Return top-k CVE results using ArrowSpace spectral (taumode) search.
-
-        Args:
-            query : 384-d query embedding (float64).
-            tau   : Spectral sharpness for taumode.
-            k     : Number of results to return.
-
-        Returns:
-            List of result dicts with 'content' always populated from parquet.
-        """
         if query.ndim != 1 or query.shape[0] != _DIM:
-            raise ValueError(
-                f"Query must be 1-D with dim={_DIM}, got shape {query.shape}"
-            )
+            raise ValueError(f"Query must be 1-D with dim={_DIM}, got shape {query.shape}")
         query = query.astype(np.float64)
 
         hits: list[tuple[int, float]] = self.aspace.search(query, self.gl, tau)
-
         pool_size = len(hits)
         if pool_size == 0:
             return []
-        if k > pool_size:
-            log.warning(
-                "Requested k=%d but search pool has only %d results; returning %d.",
-                k, pool_size, pool_size,
-            )
-            k = pool_size
+        k = min(k, pool_size)
 
         results: list[dict] = []
         for rank, (corpus_i, score) in enumerate(hits[:k]):
-            cve_id  = self.ids[corpus_i]                   # already uppercased
-            content = self._meta.get(cve_id, "")           # parquet text
+            cve_id  = self.ids[corpus_i]
+            content = self._meta.get(cve_id, "")
             results.append({
                 "rank"    : rank + 1,
                 "id"      : cve_id,
-                "title"   : cve_id,                        # PromptSearchResult needs title
+                "title"   : cve_id,
                 "tau"     : tau,
                 "score"   : float(score),
                 "content" : content,
-                "body"    : content,                       # keep body in sync
+                "body"    : content,
                 "salience": 0.0,
                 "upvotes" : 0,
                 "views"   : 0,
@@ -277,7 +248,4 @@ class CveSearchEngine:
         return results
 
 
-# ---------------------------------------------------------------------------
-# Backwards-compat alias for any routes not yet renamed
-# ---------------------------------------------------------------------------
 PromptSearchEngine = CveSearchEngine
