@@ -7,6 +7,8 @@
 #   - Removed MMR re-ranking and salience weighting
 #   - Pure ArrowSpace spectral search only
 #   - Zarr fallback for embedding load when .npy files are absent
+# Fix: settings.data_dir -> settings.prompt_data_dir (field was renamed
+#      in settings.py; this caused 503 on every /api/prompts/* call)
 from __future__ import annotations
 
 import json
@@ -96,7 +98,7 @@ def _load_embeddings(data_dir: Path) -> tuple[np.ndarray, list[str]]:
                 f"  - {npy_embs}\n"
                 f"  - {zarr_path}\n"
                 f"  - {alt}\n"
-                "Set ARRO_SERVER_DATA_DIR to a directory containing cve_embeddings_demo/"
+                "Set ARRO_SERVER_PROMPT_DATA_DIR to a directory containing cve_embeddings_demo/"
             )
 
     try:
@@ -159,7 +161,7 @@ class CveSearchEngine:
     """Singleton that holds the ArrowSpace index and exposes CVE semantic search.
 
     Pure spectral search via ArrowSpace taumode — no re-ranking layer.
-    The data directory is resolved from Settings.data_dir so the engine
+    The data directory is resolved from Settings.prompt_data_dir so the engine
     works correctly both in dev layout and inside containers.
     """
 
@@ -188,7 +190,8 @@ class CveSearchEngine:
         if cls._instance is None:
             from .settings import get_settings
             settings = get_settings()
-            cls._instance = cls(Path(settings.data_dir))
+            # FIX: was `settings.data_dir` — field is named `prompt_data_dir`
+            cls._instance = cls(Path(settings.prompt_data_dir))
         return cls._instance
 
     @classmethod
