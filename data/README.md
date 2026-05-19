@@ -1,80 +1,69 @@
 # Data Directory
 
-Large binary files (`.npy`, `.zarr`) are **not tracked in git**.
-This directory documents the expected layout and how to obtain or regenerate each file.
+This directory is **gitignored** — large binary files are not committed to the repository.
+All files must be generated locally or downloaded from a shared storage location.
 
----
-
-## Expected layout
+## Structure
 
 ```
 data/
-├── cve_embeddings_demo/
-│   ├── embs_99_to_14.npy        ← Period A: CVE 1999–2014  (float32, shape N×D)
-│   └── embs_15_to_2025.npy      ← Period B: CVE 2015–2025  (float32, shape N×D)
+├── cve_embs/
+│   └── cve_corpus.parquet          # Primary data file — see schema below
 ├── cve_zarr/
-│   ├── cve_99_2014.zarr/        ← Optional: Zarr v3 source for Period A
-│   └── cve_15_2025.zarr/        ← Optional: Zarr v3 source for Period B
-└── results/                     ← Auto-created by notebooks
-    ├── spectral_drift_overview.png
-    └── yearly_spectral_drift.csv
+│   ├── cve_99_2014.zarr/           # Pre-split ArrowSpace Zarr store (period A: 1999–2014)
+│   └── cve_15_2025.zarr/           # Pre-split ArrowSpace Zarr store (period B: 2015–2025)
+├── cve_embeddings_demo/
+│   ├── embs_99_to_14.npy           # Embedding matrix for period A (1999–2014)
+│   └── embs_15_to_2025.npy         # Embedding matrix for period B (2015–2025)
+└── results/
+    └── cve_arrowspace_fstar/       # Optuna tuner output (timestamped run dirs)
+        └── <timestamp>/
+            └── best_params.json    # Loaded by _load_best_params() at startup
 ```
 
----
+## `cve_corpus.parquet` schema (confirmed 2026-05-19)
 
-## Obtaining the embedding files
+| Column | Type | Description |
+|--------|------|-------------|
+| `cve_id` | `str` | CVE identifier, e.g. `CVE-1999-0001` |
+| `year` | `int64` | Publication year extracted from the CVE ID |
+| `text` | `str` | Vulnerability description (used for embedding) |
+| `row_id` | `int64` | Sequential row index aligned to the embedding matrix |
+| `embedding` | `object` | Pre-computed embedding vector (`np.ndarray`, shape `(384,)`) |
 
-### Option A — from a colleague / shared drive
+**Total rows:** 307 251 CVEs (1999–2025)  
+**Embedding model:** `all-MiniLM-L6-v2`, output dimension `384`
 
-Copy the two `.npy` files into `data/cve_embeddings_demo/` and you are done.
-The server will pick them up on next start (or first request to `/api/drift/*`).
-
-### Option B — regenerate from NVD source
-
-Run the data preparation notebook:
+## Regenerating the corpus
 
 ```bash
-uv pip install -e '.[notebook]'
-jupyter lab notebooks/cve.ipynb
+# 1. Parse cvelistV5 JSON tree → Parquet + embeddings
+uv run python scripts/build_corpus.py
+
+# 2. Optionally re-run Optuna hyperparameter tuning
+uv run python scripts/tune_arrowspace.py
 ```
 
-The notebook downloads the NVD JSON feeds, parses CVE descriptions, embeds
-them with `nomic-embed-text-v1.5`, and saves the two period `.npy` files
-to this directory.
+## Period splits for spectral drift
 
-### Option C — from the Zarr stores
+The two `.npy` files in `cve_embeddings_demo/` are row-aligned slices of the
+full corpus embedding matrix, partitioned by time period:
 
-If you have the `.zarr` directories instead of `.npy` files, the
-`CveDriftEngine` can load them directly.  Point the env vars at the Zarr paths:
+| File | Period | Rows |
+|------|--------|------|
+| `embs_99_to_14.npy` | 1999–2014 | ~80k |
+| `embs_15_to_2025.npy` | 2015–2025 | ~227k |
 
-```bash
-export ARRO_SERVER_CVE_PERIOD_A=$(pwd)/data/cve_zarr/cve_99_2014.zarr
-export ARRO_SERVER_CVE_PERIOD_B=$(pwd)/data/cve_zarr/cve_15_2025.zarr
+These are consumed by `CveDriftEngine` (`src/arro_server/drift_engine.py`) which
+builds a separate ArrowSpace index per period and exposes the Wasserstein drift
+score via `/api/drift/score`.
+
+## Quick verification
+
+```python
+import pandas as pd
+df = pd.read_parquet('data/cve_embs/cve_corpus.parquet')
+print(df.dtypes)
+print(df.shape)          # (307251, 5)
+print(df.head(2))
 ```
-
-The engine auto-detects the `c/` sub-key layout used by the CVE embedding
-pipeline, so no manual conversion is needed.
-
----
-
-## File sizes (approximate)
-
-| File | Shape | Dtype | Size on disk |
-|------|-------|-------|--------------|
-| `embs_99_to_14.npy` | ~80 000 × 384 | float32 | ~115 MB |
-| `embs_15_to_2025.npy` | ~180 000 × 384 | float32 | ~260 MB |
-
----
-
-## gitignore rules
-
-The following patterns are ignored (see `.gitignore`):
-
-```
-data/cve_embeddings_demo/*.npy
-data/cve_zarr/
-data/results/*.png
-data/results/*.csv
-```
-
-Only this `README.md` is tracked.
