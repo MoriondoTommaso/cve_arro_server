@@ -7,6 +7,11 @@
 # Modifications for CVE spectral drift demo:
 #   - Added `cve_period_a` / `cve_period_b` fields pointing at the two
 #     embedding slices used by CveDriftEngine (/api/drift/* routes)
+#   - Added `cve_n_sample` field controlling subsampling in the drift engine
+#   - FIX: cve_period_a/b defaults are now relative path strings resolved at
+#     access time, not absolute paths computed from __file__ at import time.
+#     The old approach broke in installed / containerised environments where
+#     __file__ points inside site-packages.
 # See CHANGES.md for full modification record.
 from __future__ import annotations
 
@@ -19,9 +24,6 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 log = logging.getLogger(__name__)
-
-_DATA_DIR = Path(__file__).parents[2] / "data"
-_CVE_DEMO_DIR = _DATA_DIR / "cve_embeddings_demo"
 
 
 class Settings(BaseSettings):
@@ -36,6 +38,18 @@ class Settings(BaseSettings):
     ``cors_origins`` accepts a comma-separated list of allowed origins, e.g.
     ``ARRO_SERVER_CORS_ORIGINS=https://app.example.com,https://admin.example.com``.
     Use ``*`` (the default) to allow all origins — do not use ``*`` in production.
+
+    CVE drift paths
+    ---------------
+    ``cve_period_a`` / ``cve_period_b`` default to relative paths
+    ``data/cve_embeddings_demo/embs_99_to_14.npy`` and
+    ``data/cve_embeddings_demo/embs_15_to_2025.npy`` resolved against the
+    process CWD at runtime.  Override via environment variables
+    ``ARRO_SERVER_CVE_PERIOD_A`` / ``ARRO_SERVER_CVE_PERIOD_B`` (absolute or
+    relative paths).
+
+    ``cve_n_sample`` controls how many rows are passed to ArrowSpaceBuilder.
+    Defaults to 8 000; set to 0 to disable subsampling (slow on large arrays).
     """
 
     model_config = SettingsConfigDict(
@@ -55,12 +69,15 @@ class Settings(BaseSettings):
     index_cache_size: int = 8
 
     # ── Prompt search (LEAF Kaban) ──────────────────────────────────────────────
-    prompt_data_dir: str = str(_DATA_DIR)
+    prompt_data_dir: str = "./data"
     embedder_model: str = "nomic-ai/nomic-embed-text-v1.5"
 
-    # ── CVE spectral drift (two-period demo) ────────────────────────────────
-    cve_period_a: str = str(_CVE_DEMO_DIR / "embs_99_to_14.npy")
-    cve_period_b: str = str(_CVE_DEMO_DIR / "embs_15_to_2025.npy")
+    # ── CVE spectral drift (two-period demo) ────────────────────────────────────
+    # Relative to CWD so they work both locally (run from repo root) and inside
+    # Docker (WORKDIR /app with data mounted at /app/data).
+    cve_period_a: str = "data/cve_embeddings_demo/embs_99_to_14.npy"
+    cve_period_b: str = "data/cve_embeddings_demo/embs_15_to_2025.npy"
+    cve_n_sample: int = 8_000   # rows subsampled per period for the index build
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod

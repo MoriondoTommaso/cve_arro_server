@@ -1,4 +1,4 @@
-# ADDED FILE
+# MODIFIED FILE
 # Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
 # Author: Tommaso Moriondo — CVE spectral drift demo
 #
@@ -8,6 +8,14 @@
 #
 # Period A: CVE 1999–2014  (embs_99_to_14.npy  or cve_99_2014.zarr)
 # Period B: CVE 2015–2025  (embs_15_to_2025.npy or cve_15_2025.zarr)
+#
+# Changes vs. original:
+#   - Import `arrowspace` (not `pyarrowspace`) — matches installed package name
+#   - ArrowSpaceBuilder().build(graph_params, arr) — correct positional order
+#   - Store GraphLaplacian `gl` on _PeriodIndex for search calls
+#   - search_period: call aspace.search(vec, gl, tau) not aspace.search(dict)
+#   - _build_arrowspace: add n_sample + stratified subsampling (default 8 000)
+#   - settings.py: cve_period_a/b defaults now relative to CWD, not __file__
 """CVE spectral drift engine.
 
 Two-period ArrowSpace engine used by the /api/drift/* route group.
@@ -25,6 +33,21 @@ from typing import Any
 import numpy as np
 
 log = logging.getLogger(__name__)
+
+# Default graph params — same as arrowspace_adapter.DEFAULT_GRAPH_PARAMS
+_DEFAULT_GRAPH_PARAMS: dict[str, Any] = {
+    "eps": 1.2311,
+    "k": 38,
+    "topk": 19,
+    "p": 2.0,
+    "sigma": None,
+}
+
+# Maximum number of rows passed to ArrowSpaceBuilder.build().
+# The full CVE corpus is 80k–180k entries; building a graph-Laplacian index on
+# the full array takes O(n^2) memory and 30+ minutes.  We subsample to a
+# representative slice for the demo.  Set ARRO_SERVER_CVE_N_SAMPLE=0 to disable.
+_DEFAULT_N_SAMPLE = 8_000
 
 
 # ---------------------------------------------------------------------------
@@ -102,24 +125,78 @@ def _load_embeddings(path: str | Path) -> np.ndarray:
         ) from exc
 
 
-def _build_arrowspace(arr: np.ndarray, label: str) -> Any:
+def _subsample(arr: np.ndarray, n_sample: int, rng_seed: int = 42) -> np.ndarray:
+    """Return a stratified random subsample of *arr* (rows).
+
+    If ``n_sample <= 0`` or ``n_sample >= len(arr)`` the full array is returned
+    unchanged.  The sample is drawn without replacement using a fixed seed so
+    the index is deterministic across restarts.
+    """
+    n = len(arr)
+    if n_sample <= 0 or n_sample >= n:
+        return arr
+    rng = np.random.default_rng(rng_seed)
+    idx = rng.choice(n, size=n_sample, replace=False)
+    idx.sort()  # preserve row order for interpretability
+    log.info("Subsampled %d → %d rows for ArrowSpace index", n, n_sample)
+    return arr[idx]
+
+
+def _build_arrowspace(
+    arr: np.ndarray,
+    label: str,
+    n_sample: int = _DEFAULT_N_SAMPLE,
+    graph_params: dict[str, Any] | None = None,
+) -> tuple[Any, Any]:
     """Build an ArrowSpace index for the given embedding array.
 
-    Returns the ArrowSpace object (pyarrowspace.ArrowSpace).
-    Raises ImportError if pyarrowspace is not installed.
+    Parameters
+    ----------
+    arr:
+        Full embedding matrix (N × D).  Will be subsampled to *n_sample* rows
+        before indexing unless n_sample <= 0.
+    label:
+        Human-readable name used in log messages.
+    n_sample:
+        Maximum number of rows to pass to ArrowSpaceBuilder.build().
+        Defaults to _DEFAULT_N_SAMPLE (8 000).  Set to 0 to disable.
+    graph_params:
+        ArrowSpace graph construction parameters.  Defaults to
+        _DEFAULT_GRAPH_PARAMS.
+
+    Returns
+    -------
+    (aspace, gl) : tuple[ArrowSpace, GraphLaplacian]
+        Both objects are needed — ``gl`` is required by every search call.
+
+    Raises
+    ------
+    ImportError
+        If the ``arrowspace`` package is not installed.
     """
     try:
-        from pyarrowspace import ArrowSpaceBuilder  # type: ignore
+        from arrowspace import ArrowSpaceBuilder  # type: ignore  # package name: arrowspace
     except ImportError:
         raise ImportError(
-            "pyarrowspace is required for the drift engine. "
-            "Install with: pip install pyarrowspace"
+            "arrowspace is required for the drift engine. "
+            "Install with: pip install arrowspace"
         )
-    log.info("Building ArrowSpace index for period '%s'  shape=%s …", label, arr.shape)
-    builder = ArrowSpaceBuilder()
-    aspace = builder.build(arr)
-    log.info("ArrowSpace index built for period '%s'  nitems=%d", label, aspace.nitems)
-    return aspace
+
+    gp = graph_params or _DEFAULT_GRAPH_PARAMS
+    sub = _subsample(arr, n_sample)
+    sub64 = np.asarray(sub, dtype=np.float64)
+
+    log.info(
+        "Building ArrowSpace index for period '%s'  shape=%s params=%s …",
+        label, sub64.shape, gp,
+    )
+    # Correct call order: ArrowSpaceBuilder().build(graph_params, array)
+    aspace, gl = ArrowSpaceBuilder().build(gp, sub64)
+    log.info(
+        "ArrowSpace index built for period '%s'  nitems=%d nclusters=%d",
+        label, aspace.nitems, aspace.nclusters,
+    )
+    return aspace, gl
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +207,9 @@ def _build_arrowspace(arr: np.ndarray, label: str) -> Any:
 class _PeriodIndex:
     label: str
     path: str
-    embeddings: np.ndarray
-    aspace: Any  # pyarrowspace.ArrowSpace
+    embeddings: np.ndarray   # subsampled array actually indexed
+    aspace: Any              # arrowspace.ArrowSpace
+    gl: Any                  # arrowspace.GraphLaplacian — required for every search call
     lambdas: list[float] = field(default_factory=list)
 
 
@@ -178,7 +256,8 @@ class CveDriftEngine:
             settings = get_settings()
             path_a = settings.cve_period_a
             path_b = settings.cve_period_b
-            cls._instance = cls._build(path_a, path_b)
+            n_sample = getattr(settings, "cve_n_sample", _DEFAULT_N_SAMPLE)
+            cls._instance = cls._build(path_a, path_b, n_sample=n_sample)
         return cls._instance
 
     @classmethod
@@ -188,29 +267,40 @@ class CveDriftEngine:
             cls._instance = None
 
     @classmethod
-    def _build(cls, path_a: str, path_b: str) -> "CveDriftEngine":
+    def _build(
+        cls,
+        path_a: str,
+        path_b: str,
+        n_sample: int = _DEFAULT_N_SAMPLE,
+    ) -> "CveDriftEngine":
         """Load both periods, build indices, compute lambdas."""
         embs_a = _load_embeddings(path_a)
         embs_b = _load_embeddings(path_b)
 
-        aspace_a = _build_arrowspace(embs_a, "period_a")
-        aspace_b = _build_arrowspace(embs_b, "period_b")
+        aspace_a, gl_a = _build_arrowspace(embs_a, "period_a", n_sample=n_sample)
+        aspace_b, gl_b = _build_arrowspace(embs_b, "period_b", n_sample=n_sample)
 
         lambdas_a = cls._extract_lambdas(aspace_a)
         lambdas_b = cls._extract_lambdas(aspace_b)
 
+        # Keep only the subsampled slice in memory (full arrays are large)
+        sub_a = _subsample(embs_a, n_sample)
+        sub_b = _subsample(embs_b, n_sample)
+
         pa = _PeriodIndex(
             label="period_a",
             path=path_a,
-            embeddings=embs_a,
+            embeddings=sub_a,
             aspace=aspace_a,
+            gl=gl_a,
             lambdas=lambdas_a,
         )
         pb = _PeriodIndex(
             label="period_b",
             path=path_b,
-            embeddings=embs_b,
+            embeddings=sub_b,
             aspace=aspace_b,
+            gl=gl_b,
             lambdas=lambdas_b,
         )
         return cls(pa, pb)
@@ -236,10 +326,25 @@ class CveDriftEngine:
         k: int = 10,
         tau: float = 0.5,
     ) -> list[dict[str, Any]]:
-        """Run spectral search against a single period index."""
+        """Run spectral search against a single period index.
+
+        Calls ``aspace.search(vec, gl, tau)`` — the correct pyarrowspace
+        positional signature confirmed in arrowspace_adapter.py.
+        """
         try:
-            raw = period.aspace.search({"vector": vector.tolist(), "tau": tau})
-            results = raw if isinstance(raw, list) else raw.get("results", [])
+            q_arr = np.asarray(vector, dtype=np.float64)
+            # Correct call: aspace.search(query_vector, graph_laplacian, tau)
+            raw = period.aspace.search(q_arr, period.gl, tau)
+            # raw is List[(int, float)] per the adapter docstring
+            if isinstance(raw, list):
+                results = [
+                    {"index": int(i), "score": float(s)}
+                    for i, s in raw
+                ]
+            elif isinstance(raw, dict):
+                results = raw.get("results", [])
+            else:
+                results = []
         except Exception as exc:
             log.warning("search_period failed for %s: %s", period.label, exc)
             results = []

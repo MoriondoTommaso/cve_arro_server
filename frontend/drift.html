@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CVE Spectral Drift — ArrowSpace Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    /* ── Design tokens (Nexus — dark-first) ──────────────────────────────── */
+    :root, [data-theme="dark"] {
+      --color-bg:              #0f0f0d;
+      --color-surface:         #171614;
+      --color-surface-2:       #1d1c1a;
+      --color-surface-offset:  #232220;
+      --color-border:          #2e2c2a;
+      --color-divider:         #252422;
+      --color-text:            #d4d3d1;
+      --color-text-muted:      #7a7977;
+      --color-text-faint:      #4a4947;
+      --color-primary:         #4f98a3;
+      --color-primary-hover:   #3c8490;
+      --color-primary-highlight: #1e3236;
+      --color-success:         #6daa45;
+      --color-warning:         #e8af34;
+      --color-error:           #d163a7;
+      --color-orange:          #fdab43;
+      --color-gold:            #e8af34;
+      --color-blue:            #5591c7;
+      --color-purple:          #a86fdf;
+      --color-shadow:          rgba(0,0,0,.45);
+      --radius-sm: .375rem; --radius-md: .5rem; --radius-lg: .75rem; --radius-xl: 1rem; --radius-full: 9999px;
+      --font-display: 'Instrument Serif', Georgia, serif;
+      --font-body:    'DM Sans', system-ui, sans-serif;
+      --text-xs:   clamp(.75rem,  .7rem  + .25vw, .875rem);
+      --text-sm:   clamp(.875rem, .8rem  + .35vw, 1rem);
+      --text-base: clamp(1rem,    .95rem + .25vw, 1.125rem);
+      --text-lg:   clamp(1.125rem,1rem   + .75vw, 1.5rem);
+      --text-xl:   clamp(1.5rem,  1.2rem + 1.25vw,2.25rem);
+      --text-2xl:  clamp(2rem,    1.2rem + 2.5vw, 3.5rem);
+      --space-1:.25rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;
+      --space-6:1.5rem;--space-8:2rem;--space-10:2.5rem;--space-12:3rem;
+      --space-16:4rem;
+      --transition: 180ms cubic-bezier(.16,1,.3,1);
+    }
+    [data-theme="light"] {
+      --color-bg:              #f7f6f2;
+      --color-surface:         #f9f8f5;
+      --color-surface-2:       #fbfbf9;
+      --color-surface-offset:  #f0ede8;
+      --color-border:          #d4d1ca;
+      --color-divider:         #dcd9d5;
+      --color-text:            #28251d;
+      --color-text-muted:      #7a7974;
+      --color-text-faint:      #bab9b4;
+      --color-primary:         #01696f;
+      --color-primary-hover:   #0c4e54;
+      --color-primary-highlight: #cedcd8;
+      --color-success:         #437a22;
+      --color-warning:         #d19900;
+      --color-error:           #a12c7b;
+      --color-orange:          #da7101;
+      --color-gold:            #d19900;
+      --color-blue:            #006494;
+      --color-purple:          #7a39bb;
+      --color-shadow:          rgba(40,37,29,.1);
+    }
+
+    /* ── Reset + base ─────────────────────────────────────────────────── */
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;scroll-behavior:smooth}
+    body{
+      min-height:100dvh;
+      font-family:var(--font-body);
+      font-size:var(--text-base);
+      color:var(--color-text);
+      background:var(--color-bg);
+      line-height:1.6;
+    }
+    img,svg{display:block;max-width:100%}
+    button{cursor:pointer;background:none;border:none;font:inherit;color:inherit}
+    h1,h2,h3,h4{text-wrap:balance;line-height:1.15}
+    p{text-wrap:pretty;max-width:72ch}
+    a,button,[role=button]{transition:color var(--transition),background var(--transition),border-color var(--transition),box-shadow var(--transition)}
+    :focus-visible{outline:2px solid var(--color-primary);outline-offset:3px;border-radius:var(--radius-sm)}
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    .app-shell{
+      display:grid;
+      grid-template-rows:auto 1fr;
+      min-height:100dvh;
+    }
+    .topbar{
+      position:sticky;top:0;z-index:100;
+      display:flex;align-items:center;justify-content:space-between;
+      padding:var(--space-3) var(--space-8);
+      background:color-mix(in oklch, var(--color-bg) 85%, transparent);
+      backdrop-filter:blur(12px);
+      border-bottom:1px solid var(--color-divider);
+    }
+    .logo{
+      display:flex;align-items:center;gap:var(--space-3);
+    }
+    .logo-mark svg{flex-shrink:0}
+    .logo-text{
+      font-family:var(--font-display);
+      font-size:var(--text-lg);
+      letter-spacing:-.02em;
+    }
+    .logo-sub{
+      font-size:var(--text-xs);
+      color:var(--color-text-muted);
+      margin-top:-.1em;
+      letter-spacing:.04em;
+      text-transform:uppercase;
+    }
+    .topbar-right{display:flex;align-items:center;gap:var(--space-4)}
+    .status-pill{
+      display:inline-flex;align-items:center;gap:var(--space-2);
+      padding:.25rem .75rem;
+      border-radius:var(--radius-full);
+      font-size:var(--text-xs);
+      font-weight:600;
+      letter-spacing:.04em;
+      text-transform:uppercase;
+      border:1px solid var(--color-border);
+      background:var(--color-surface);
+      color:var(--color-text-muted);
+    }
+    .status-pill.ok{color:var(--color-success);border-color:color-mix(in oklch,var(--color-success) 30%,var(--color-border))}
+    .status-pill.err{color:var(--color-error);border-color:color-mix(in oklch,var(--color-error) 30%,var(--color-border))}
+    .status-pill.loading{color:var(--color-warning);border-color:color-mix(in oklch,var(--color-warning) 30%,var(--color-border))}
+    .dot{width:6px;height:6px;border-radius:var(--radius-full);background:currentColor;flex-shrink:0}
+    .theme-btn{
+      width:36px;height:36px;
+      display:flex;align-items:center;justify-content:center;
+      border-radius:var(--radius-md);
+      color:var(--color-text-muted);
+    }
+    .theme-btn:hover{background:var(--color-surface-offset);color:var(--color-text)}
+
+    .main-content{
+      max-width:1280px;
+      margin-inline:auto;
+      width:100%;
+      padding:var(--space-8);
+      display:flex;
+      flex-direction:column;
+      gap:var(--space-8);
+    }
+
+    /* ── Hero score banner ─────────────────────────────────────────────── */
+    .hero-banner{
+      display:grid;
+      grid-template-columns:1fr auto;
+      align-items:center;
+      gap:var(--space-6);
+      background:var(--color-surface);
+      border:1px solid var(--color-border);
+      border-radius:var(--radius-xl);
+      padding:var(--space-8);
+    }
+    .hero-eyebrow{
+      font-size:var(--text-xs);
+      font-weight:600;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+      color:var(--color-text-muted);
+      margin-bottom:var(--space-2);
+    }
+    .hero-title{
+      font-family:var(--font-display);
+      font-size:var(--text-2xl);
+      color:var(--color-text);
+      line-height:1.1;
+    }
+    .hero-title em{
+      font-style:italic;
+      color:var(--color-primary);
+    }
+    .hero-desc{
+      margin-top:var(--space-3);
+      color:var(--color-text-muted);
+      font-size:var(--text-sm);
+      max-width:52ch;
+    }
+    .drift-score-card{
+      text-align:center;
+      background:var(--color-surface-offset);
+      border:1px solid var(--color-border);
+      border-radius:var(--radius-lg);
+      padding:var(--space-6) var(--space-10);
+      min-width:200px;
+    }
+    .drift-score-label{
+      font-size:var(--text-xs);
+      font-weight:600;
+      letter-spacing:.06em;
+      text-transform:uppercase;
+      color:var(--color-text-muted);
+      margin-bottom:var(--space-2);
+    }
+    .drift-score-value{
+      font-family:var(--font-display);
+      font-size:var(--text-2xl);
+      font-variant-numeric:tabular-nums;
+      color:var(--color-primary);
+      line-height:1;
+    }
+    .drift-score-sub{
+      font-size:var(--text-xs);
+      color:var(--color-text-faint);
+      margin-top:var(--space-2);
+    }
+
+    /* ── Section titles ────────────────────────────────────────────────── */
+    .section-header{
+      display:flex;align-items:center;gap:var(--space-3);
+      margin-bottom:var(--space-4);
+    }
+    .section-title{
+      font-size:var(--text-lg);
+      font-weight:600;
+      color:var(--color-text);
+    }
+    .section-badge{
+      font-size:var(--text-xs);
+      font-weight:600;
+      letter-spacing:.05em;
+      text-transform:uppercase;
+      color:var(--color-primary);
+      background:var(--color-primary-highlight);
+      padding:.2rem .55rem;
+      border-radius:var(--radius-full);
+    }
+
+    /* ── Spectrum chart card ───────────────────────────────────────────── */
+    .chart-card{
+      background:var(--color-surface);
+      border:1px solid var(--color-border);
+      border-radius:var(--radius-xl);
+      padding:var(--space-6);
+    }
+    .chart-wrap{
+      position:relative;
+      height:260px;
+    }
+    .chart-legend{
+      display:flex;gap:var(--space-6);
+      margin-top:var(--space-4);
+      justify-content:center;
+    }
+    .legend-item{
+      display:flex;align-items:center;gap:var(--space-2);
+      font-size:var(--text-xs);
+      color:var(--color-text-muted);
+    }
+    .legend-dot{
+      width:10px;height:10px;border-radius:var(--radius-full);flex-shrink:0
+    }
+
+    /* ── Search panel ──────────────────────────────────────────────────── */
+    .search-card{
+      background:var(--color-surface);
+      border:1px solid var(--color-border);
+      border-radius:var(--radius-xl);
+      padding:var(--space-6);
+    }
+    .search-form{
+      display:flex;gap:var(--space-3);
+      margin-bottom:var(--space-6);
+    }
+    .search-input{
+      flex:1;
+      background:var(--color-surface-offset);
+      border:1px solid var(--color-border);
+      border-radius:var(--radius-md);
+      padding:var(--space-3) var(--space-4);
+      font-size:var(--text-base);
+      color:var(--color-text);
+      outline:none;
+      transition:border-color var(--transition),box-shadow var(--transition);
+    }
+    .search-input::placeholder{color:var(--color-text-faint)}
+    .search-input:focus{
+      border-color:var(--color-primary);
+      box-shadow:0 0 0 3px color-mix(in oklch,var(--color-primary) 18%,transparent);
+    }
+    .btn-primary{
+      background:var(--color-primary);
+      color:#fff;
+      border-radius:var(--radius-md);
+      padding:var(--space-3) var(--space-6);
+      font-size:var(--text-sm);
+      font-weight:600;
+      letter-spacing:.02em;
+      white-space:nowrap;
+    }
+    .btn-primary:hover{background:var(--color-primary-hover)}
+    .btn-primary:disabled{opacity:.45;cursor:not-allowed}
+    .search-note{
+      font-size:var(--text-xs);
+      color:var(--color-text-faint);
+      margin-top:calc(var(--space-2) * -1);
+      margin-bottom:var(--space-4);
+    }
+
+    /* ── Two-column results ────────────────────────────────────────────── */
+    .results-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:var(--space-4);
+    }
+    @media(max-width:680px){.results-grid{grid-template-columns:1fr}}
+    .period-col{
+      background:var(--color-surface-offset);
+      border:1px solid var(--color-border);
+      border-radius:var(--radius-lg);
+      overflow:hidden;
+    }
+    .period-head{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:var(--space-3) var(--space-4);
+      border-bottom:1px solid var(--color-border);
+      background:var(--color-surface);
+    }
+    .period-label{
+      font-size:var(--text-sm);
+      font-weight:600;
+      color:var(--color-text);
+    }
+    .period-years{
+      font-size:var(--text-xs);
+      color:var(--color-text-muted);
+    }
+    .results-list{
+      list-style:none;
+      padding:var(--space-2);
+      display:flex;
+      flex-direction:column;
+      gap:var(--space-1);
+      max-height:380px;
+      overflow-y:auto;
+    }
+    .result-item{
+      display:flex;align-items:center;justify-content:space-between;
+      padding:var(--space-3) var(--space-4);
+      border-radius:var(--radius-md);
+      background:var(--color-surface);
+      border:1px solid transparent;
+      transition:border-color var(--transition),background var(--transition);
+    }
+    .result-item:hover{border-color:var(--color-border);background:var(--color-surface-2)}
+    .result-idx{
+      font-size:var(--text-sm);
+      color:var(--color-text);
+      font-variant-numeric:tabular-nums;
+    }
+    .result-score{
+      font-size:var(--text-xs);
+      font-variant-numeric:tabular-nums;
+      color:var(--color-primary);
+      background:var(--color-primary-highlight);
+      padding:.15rem .45rem;
+      border-radius:var(--radius-full);
+      font-weight:600;
+    }
+    .empty-results{
+      padding:var(--space-8);
+      text-align:center;
+      color:var(--color-text-faint);
+      font-size:var(--text-sm);
+    }
+    .spinner{
+      display:inline-block;
+      width:16px;height:16px;
+      border:2px solid var(--color-border);
+      border-top-color:var(--color-primary);
+      border-radius:var(--radius-full);
+      animation:spin .7s linear infinite;
+    }
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ── Params row ────────────────────────────────────────────────────── */
+    .params-row{
+      display:flex;gap:var(--space-6);flex-wrap:wrap;
+      margin-bottom:var(--space-4);
+      align-items:flex-end;
+    }
+    .param-group{display:flex;flex-direction:column;gap:var(--space-1)}
+    .param-label{font-size:var(--text-xs);color:var(--color-text-muted);font-weight:500}
+    .param-input{
+      width:90px;
+      background:var(--color-surface-offset);
+      border:1px solid var(--color-border);
+      border-radius:var(--radius-md);
+      padding:var(--space-2) var(--space-3);
+      font-size:var(--text-sm);
+      color:var(--color-text);
+      outline:none;
+    }
+    .param-input:focus{border-color:var(--color-primary)}
+
+    /* ── Footer ────────────────────────────────────────────────────────── */
+    .footer-note{
+      font-size:var(--text-xs);
+      color:var(--color-text-faint);
+      text-align:center;
+      padding:var(--space-4) 0 var(--space-8);
+    }
+
+    @media(max-width:900px){
+      .hero-banner{grid-template-columns:1fr}
+      .drift-score-card{min-width:unset}
+      .main-content{padding:var(--space-4)}
+      .topbar{padding:var(--space-3) var(--space-4)}
+    }
+  </style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ── Top bar ────────────────────────────────────────────────────── -->
+  <header class="topbar">
+    <div class="logo">
+      <div class="logo-mark">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-label="ArrowSpace logo">
+          <rect width="32" height="32" rx="8" fill="var(--color-primary)" opacity=".15"/>
+          <path d="M8 16 L16 8 L24 16" stroke="var(--color-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M12 20 L16 8 L20 20" stroke="var(--color-primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity=".6"/>
+          <circle cx="16" cy="24" r="2" fill="var(--color-primary)"/>
+        </svg>
+      </div>
+      <div>
+        <div class="logo-text">ArrowSpace</div>
+        <div class="logo-sub">CVE Spectral Drift</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="status-pill loading" id="status-pill">
+        <span class="dot"></span>
+        <span id="status-text">Connecting…</span>
+      </div>
+      <button class="theme-btn" data-theme-toggle aria-label="Toggle theme">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Main ───────────────────────────────────────────────────────── -->
+  <main class="main-content">
+
+    <!-- Hero banner -->
+    <section class="hero-banner">
+      <div>
+        <div class="hero-eyebrow">Powered by ArrowSpace · Graph-Laplacian Indexing</div>
+        <h1 class="hero-title">CVE Dataset <em>Spectral Drift</em></h1>
+        <p class="hero-desc">
+          Comparing the graph-Laplacian eigenvalue spectrum of two CVE time periods
+          (1999–2014 vs 2015–2025) reveals how the vulnerability landscape has structurally
+          shifted — impossible to detect with cosine similarity alone.
+        </p>
+      </div>
+      <div class="drift-score-card">
+        <div class="drift-score-label">Wasserstein-1 Drift</div>
+        <div class="drift-score-value" id="drift-val">—</div>
+        <div class="drift-score-sub">λ distribution distance</div>
+      </div>
+    </section>
+
+    <!-- Spectrum chart -->
+    <section class="chart-card">
+      <div class="section-header">
+        <h2 class="section-title">Eigenvalue Spectrum</h2>
+        <span class="section-badge">λ distribution</span>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="spectrumChart" aria-label="Eigenvalue spectrum overlay chart"></canvas>
+      </div>
+      <div class="chart-legend">
+        <div class="legend-item">
+          <div class="legend-dot" style="background:rgba(79,152,163,.85)"></div>
+          <span>Period A — 1999–2014</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background:rgba(168,111,223,.85)"></div>
+          <span>Period B — 2015–2025</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Search panel -->
+    <section class="search-card">
+      <div class="section-header">
+        <h2 class="section-title">Side-by-Side Spectral Search</h2>
+        <span class="section-badge">taumode</span>
+      </div>
+      <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-4)">
+        Enter a CVE description keyword. A mock embedding is generated server-side and queried
+        against both period indices simultaneously — showing how ArrowSpace retrieves structurally
+        different neighbours across time periods.
+      </p>
+      <div class="search-form">
+        <input
+          class="search-input"
+          id="queryInput"
+          type="text"
+          placeholder="e.g. buffer overflow, SQL injection, remote code execution…"
+          autocomplete="off"
+        />
+        <button class="btn-primary" id="searchBtn" onclick="runSearch()">Search</button>
+      </div>
+      <div class="params-row">
+        <div class="param-group">
+          <label class="param-label" for="paramK">k (results)</label>
+          <input class="param-input" id="paramK" type="number" value="10" min="1" max="50" />
+        </div>
+        <div class="param-group">
+          <label class="param-label" for="paramTau">τ (sharpness)</label>
+          <input class="param-input" id="paramTau" type="number" value="0.5" min="0" max="5" step="0.05" />
+        </div>
+      </div>
+      <p class="search-note">The query vector is derived from the index centroid perturbed by a hash of your keyword — no external embedder required for this demo.</p>
+      <div class="results-grid" id="resultsGrid">
+        <div class="period-col">
+          <div class="period-head">
+            <span class="period-label">Period A</span>
+            <span class="period-years">1999 – 2014</span>
+          </div>
+          <ul class="results-list" id="resultsA"><li class="empty-results">Run a search to see results</li></ul>
+        </div>
+        <div class="period-col">
+          <div class="period-head">
+            <span class="period-label">Period B</span>
+            <span class="period-years">2015 – 2025</span>
+          </div>
+          <ul class="results-list" id="resultsB"><li class="empty-results">Run a search to see results</li></ul>
+        </div>
+      </div>
+    </section>
+
+    <p class="footer-note">ArrowSpace graph-Laplacian spectral search · CVE drift demo · &copy; 2026 Genefold AI Ltd</p>
+  </main>
+</div>
+
+<script>
+/* ── Theme toggle ──────────────────────────────────────────────────────── */
+(function(){
+  const btn = document.querySelector('[data-theme-toggle]');
+  const root = document.documentElement;
+  let theme = localStorage.getItem('arro-theme') ||
+    (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  root.setAttribute('data-theme', theme);
+  function setIcon(t){
+    btn.innerHTML = t === 'dark'
+      ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>'
+      : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+  }
+  setIcon(theme);
+  btn.addEventListener('click', () => {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', theme);
+    try { localStorage.setItem('arro-theme', theme); } catch(e){}
+    setIcon(theme);
+    if(window._specChart) redrawChart();
+  });
+})();
+
+/* ── API base ──────────────────────────────────────────────────────────── */
+const API = '';
+
+/* ── Health polling ────────────────────────────────────────────────────── */
+const pill   = document.getElementById('status-pill');
+const stext  = document.getElementById('status-text');
+const dval   = document.getElementById('drift-val');
+
+async function pollHealth(){
+  try{
+    const r = await fetch(API + '/api/drift/health');
+    const d = await r.json();
+    if(d.period_a_ready && d.period_b_ready){
+      pill.className = 'status-pill ok';
+      stext.textContent = 'Engine ready';
+    } else {
+      pill.className = 'status-pill loading';
+      stext.textContent = d.status || 'Building index…';
+    }
+  } catch(e){
+    pill.className = 'status-pill err';
+    stext.textContent = 'Server offline';
+  }
+}
+
+async function loadScore(){
+  try{
+    const r = await fetch(API + '/api/drift/score');
+    const d = await r.json();
+    dval.textContent = typeof d.drift_score === 'number'
+      ? d.drift_score.toFixed(5)
+      : '—';
+  } catch(e){ dval.textContent = 'n/a'; }
+}
+
+/* ── Spectrum chart ────────────────────────────────────────────────────── */
+let _lambdas = { a: [], b: [] };
+
+function kernelDensity(data, xs, bw){
+  return xs.map(x => {
+    const s = data.reduce((acc, xi) => acc + Math.exp(-0.5*((x-xi)/bw)**2), 0);
+    return s / (data.length * bw * Math.sqrt(2*Math.PI));
+  });
+}
+
+function makeSpectrumDatasets(la, lb){
+  if(!la.length && !lb.length) return { labels:[], a:[], b:[] };
+  const all = [...la, ...lb];
+  const mn = Math.min(...all), mx = Math.max(...all);
+  const N = 180;
+  const xs = Array.from({length:N}, (_,i) => mn + (mx-mn)*i/(N-1));
+  const bw = (mx - mn) / 25 || 0.01;
+  return {
+    labels: xs.map(v => v.toFixed(3)),
+    a: la.length ? kernelDensity(la, xs, bw) : Array(N).fill(0),
+    b: lb.length ? kernelDensity(lb, xs, bw) : Array(N).fill(0),
+  };
+}
+
+function buildChart(la, lb){
+  const ctx = document.getElementById('spectrumChart').getContext('2d');
+  const {labels, a, b} = makeSpectrumDatasets(la, lb);
+  if(window._specChart) window._specChart.destroy();
+  window._specChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Period A  1999–2014',
+          data: a,
+          borderColor: 'rgba(79,152,163,.85)',
+          backgroundColor: 'rgba(79,152,163,.12)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+        {
+          label: 'Period B  2015–2025',
+          data: b,
+          borderColor: 'rgba(168,111,223,.85)',
+          backgroundColor: 'rgba(168,111,223,.10)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 600 },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toExponential(3)}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            maxTicksLimit: 8,
+            color: getComputedStyle(document.documentElement).getPropertyValue('--color-text-faint').trim(),
+            font: { size: 11 },
+          },
+          grid: { color: getComputedStyle(document.documentElement).getPropertyValue('--color-divider').trim() },
+        },
+        y: {
+          ticks: {
+            color: getComputedStyle(document.documentElement).getPropertyValue('--color-text-faint').trim(),
+            font: { size: 11 },
+            callback: v => v.toExponential(1),
+          },
+          grid: { color: getComputedStyle(document.documentElement).getPropertyValue('--color-divider').trim() },
+        },
+      },
+    },
+  });
+}
+
+function redrawChart(){
+  buildChart(_lambdas.a, _lambdas.b);
+}
+
+async function loadLambdas(){
+  try{
+    const r = await fetch(API + '/api/drift/lambdas');
+    const d = await r.json();
+    _lambdas.a = d.period_a?.lambdas || [];
+    _lambdas.b = d.period_b?.lambdas || [];
+    buildChart(_lambdas.a, _lambdas.b);
+  } catch(e){
+    buildChart([], []);
+  }
+}
+
+/* ── Search ────────────────────────────────────────────────────────────── */
+function renderList(ulId, items, emptyMsg){
+  const ul = document.getElementById(ulId);
+  ul.innerHTML = '';
+  if(!items || !items.length){
+    ul.innerHTML = `<li class="empty-results">${emptyMsg}</li>`;
+    return;
+  }
+  items.forEach(it => {
+    const li = document.createElement('li');
+    li.className = 'result-item';
+    const score = typeof it.score === 'number' ? it.score.toFixed(4) : '—';
+    li.innerHTML = `<span class="result-idx">idx&nbsp;${it.index ?? it.item_index ?? '?'}</span><span class="result-score">${score}</span>`;
+    ul.appendChild(li);
+  });
+}
+
+async function runSearch(){
+  const query = document.getElementById('queryInput').value.trim();
+  if(!query){ document.getElementById('queryInput').focus(); return; }
+  const k   = parseInt(document.getElementById('paramK').value) || 10;
+  const tau = parseFloat(document.getElementById('paramTau').value) || 0.5;
+  const btn = document.getElementById('searchBtn');
+  btn.disabled = true;
+  renderList('resultsA', null, '<span class="spinner"></span>');
+  renderList('resultsB', null, '<span class="spinner"></span>');
+  document.getElementById('resultsA').innerHTML = '<li class="empty-results"><span class="spinner"></span></li>';
+  document.getElementById('resultsB').innerHTML = '<li class="empty-results"><span class="spinner"></span></li>';
+
+  try{
+    /* Build a deterministic pseudo-vector from the query string.
+       The server /api/drift/search expects a numeric vector whose dimensionality
+       matches the CVE embeddings.  For demo purposes we derive a 768-dim float
+       vector from the query text using a seeded hash so results are stable. */
+    const dim = 768;
+    const vec = Array.from({length: dim}, (_, i) => {
+      /* simple deterministic pseudo-random from query + index */
+      let h = 0;
+      const s = query + i;
+      for(let c = 0; c < s.length; c++) h = Math.imul(31, h) + s.charCodeAt(c) | 0;
+      return (h / 2147483648) * 2 - 1;   /* normalise to [-1, 1] */
+    });
+    /* L2-normalise */
+    const norm = Math.sqrt(vec.reduce((a, v) => a + v*v, 0));
+    const nvec = vec.map(v => v / norm);
+
+    const resp = await fetch(API + '/api/drift/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vector: nvec, k, tau }),
+    });
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderList('resultsA', data.period_a?.results, 'No results');
+    renderList('resultsB', data.period_b?.results, 'No results');
+    /* update drift score inline */
+    if(typeof data.drift_score === 'number'){
+      dval.textContent = data.drift_score.toFixed(5);
+    }
+  } catch(e){
+    renderList('resultsA', [], `Error: ${e.message}`);
+    renderList('resultsB', [], `Error: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('queryInput').addEventListener('keydown', e => {
+  if(e.key === 'Enter') runSearch();
+});
+
+/* ── Boot ──────────────────────────────────────────────────────────────── */
+async function boot(){
+  await pollHealth();
+  await Promise.all([loadScore(), loadLambdas()]);
+  /* re-poll health every 8 s while engine is still building */
+  const tid = setInterval(async () => {
+    await pollHealth();
+    if(pill.classList.contains('ok')) clearInterval(tid);
+  }, 8000);
+}
+
+boot();
+</script>
+</body>
+</html>
