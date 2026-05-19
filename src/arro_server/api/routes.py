@@ -8,6 +8,8 @@
 # Modifications for CVE spectral drift demo:
 #   - Added /api/drift/* route group (health, lambdas, score, search)
 #     backed by CveDriftEngine (two-period CVE spectral comparison)
+# Fix: /prompts/search and /prompts/nl_search no longer pass alpha/lam/salience
+#      to CveSearchEngine.search() which only accepts (query, tau, k).
 # See CHANGES.md for full modification record.
 """API route handlers for arro-server.
 
@@ -765,7 +767,7 @@ def prompts_audit() -> dict[str, Any]:
                 label = ids_list[i] if i < len(ids_list) else None
                 if label is None:
                     label = f"node {i}"
-                hub_text.append(f"{label} (Lᵢᵢ={float(deg_arr[i]):.3f})")
+                hub_text.append(f"{label} (Lᴵᴵ={float(deg_arr[i]):.3f})")
             x_label = f"PC1 ({pc1_pct:.1f}%)" if pc1_pct is not None else "PC1"
             y_label = f"PC2 ({pc2_pct:.1f}%)" if pc2_pct is not None else "PC2"
             subtitle = (
@@ -855,13 +857,12 @@ def prompts_search(body: PromptSearchRequest) -> PromptSearchResponse:
     engine    = _get_engine()
     query_vec = np.asarray(body.vector, dtype=np.float64)
     try:
+        # FIX: CveSearchEngine.search() only accepts (query, tau, k).
+        # alpha, lam, salience were Prompt-Kaban-only kwargs — removed.
         raw = engine.search(
             query_vec,
             k=body.k,
             tau=body.tau,
-            alpha=body.alpha,
-            lam=body.lam,
-            salience=body.salience,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -881,13 +882,12 @@ def prompts_nl_search(body: NLSearchRequest) -> PromptSearchResponse:
     engine    = _get_engine()
     query_vec = embedder.embed(body.query)
     try:
+        # FIX: CveSearchEngine.search() only accepts (query, tau, k).
+        # alpha, lam, salience were Prompt-Kaban-only kwargs — removed.
         raw = engine.search(
             query_vec,
             k=body.k,
             tau=body.tau,
-            alpha=body.alpha,
-            lam=body.lam,
-            salience=body.salience,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -934,14 +934,6 @@ def _get_drift_engine():
 
 @router.get("/drift/health")
 def drift_health(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    """Report readiness of the two CVE period indices.
-
-    Does NOT trigger engine initialisation. The engine_ready flag simply
-    reflects whether the singleton has already been built (e.g. via startup
-    warm-up or a prior call to /drift/score).
-    """
-    # Guard the import: if pyarrowspace is missing we still want a 200 JSON
-    # response rather than a raw ImportError / 500.
     engine_ready = False
     try:
         from ..drift_engine import CveDriftEngine
