@@ -4,13 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>CVE Spectral Search Engine</title>
+    <title>CVE ArrowSpace</title>
 
     <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
 
-    <link rel="stylesheet" href="./styles.css?v=frontend8-cve" />
+    <link rel="stylesheet" href="./styles.css?v=cve1" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -22,7 +22,7 @@
   <body>
     <header class="topbar">
       <div>
-        <h1>CVE Spectral Search Engine</h1>
+        <h1>CVE ArrowSpace</h1>
       </div>
 
       <nav class="app-tabs">
@@ -32,6 +32,10 @@
 
         <button id="tab-audit" class="tab-button" type="button">
           Audit
+        </button>
+
+        <button id="tab-drift" class="tab-button" type="button">
+          Spectral Drift
         </button>
       </nav>
 
@@ -78,7 +82,7 @@
           <div class="spectral-control">
             <div class="spectral-label-row">
               <label for="alpha-slider">
-                Spectral ↔ Cosine (α)
+                Spectral &#x2194; Cosine (&alpha;)
               </label>
 
               <span id="alpha-value">0.60</span>
@@ -120,7 +124,7 @@
 
             <p>
               Metadata reranking weight.
-              <strong>0 disables</strong> metadata salience,
+              <strong>0 disables</strong> salience,
               <strong>1 gives</strong> it full influence.
             </p>
           </div>
@@ -144,7 +148,7 @@
 
             <p>
               Number of CVE results returned.
-              Default matches the build-time topk (19).
+              Default matches build-time topk (19).
             </p>
           </div>
 
@@ -154,7 +158,7 @@
             </div>
 
             <div id="build-params-display" class="build-params-display">
-              <code>eps=1.2311 · k=38 · topk=19 · p=2.0 · sigma=None</code>
+              <code>eps=1.2311 &middot; k=38 &middot; topk=19 &middot; p=2.0 &middot; sigma=None</code>
             </div>
 
             <p>
@@ -184,7 +188,7 @@
               <h2>Natural Language Search</h2>
 
               <p class="subtitle">
-                Results are embedded and ranked server-side by LEAF.
+                Results are embedded and ranked server-side by ArrowSpace.
               </p>
             </div>
           </header>
@@ -192,11 +196,11 @@
           <div class="single-panel">
             <div id="grid" class="grid">
               <div class="welcome-screen">
-                <h2>CVE Spectral Search</h2>
+                <h2>CVE Semantic Search</h2>
 
                 <p>
-                  Try queries like “buffer overflow in network daemon” or
-                  “remote code execution via SQL injection”.
+                  Try queries like &ldquo;buffer overflow&rdquo; or
+                  &ldquo;remote code execution&rdquo;.
                 </p>
               </div>
             </div>
@@ -208,7 +212,7 @@
               <div class="manifold-plot-card">
                 <div id="query-manifold"></div>
                 <div id="query-manifold-tooltip" class="manifold-tooltip">
-                  Purple/red points = matched CVEs · surface = corpus structure
+                  Purple/red points = matched CVEs &middot; surface = corpus structure
                 </div>
               </div>
             </div>
@@ -218,7 +222,7 @@
               <div class="manifold-plot-card">
                 <div id="query-lambda-chart"></div>
                 <div class="manifold-tooltip">
-                  Bars = eigenvalue density · curve = cumulative spectral mass
+                  Bars = eigenvalue density &middot; curve = cumulative spectral mass
                 </div>
               </div>
             </div>
@@ -305,7 +309,7 @@
               <h3>Graph Laplacian Manifold</h3>
               <div id="audit-query-manifold" class="audit-plot-area"></div>
               <div class="manifold-tooltip">
-                Surface = corpus Laplacian degree (Lᵢᵢ) over PCA-2D · diamonds = high-degree hubs · red = matched CVEs
+                Surface = corpus Laplacian degree (L&#x1D56;&#x1D56;) over PCA-2D &middot; diamonds = high-degree hubs &middot; red = matched CVEs
               </div>
             </div>
 
@@ -313,7 +317,7 @@
               <h3>Spectral Fingerprint</h3>
               <div id="audit-spectral-fingerprint" class="audit-plot-area"></div>
               <div class="manifold-tooltip">
-                Top = λ histogram clipped at p60 · Bottom = ECDF over [0, λ_max] with p25/median/p75 markers
+                Top = &lambda; histogram clipped at p60 &middot; Bottom = ECDF over [0, &lambda;_max] with p25/median/p75 markers
               </div>
             </div>
 
@@ -331,20 +335,96 @@
           </div>
         </section>
       </section>
+
+      <!-- SPECTRAL DRIFT VIEW -->
+      <section id="drift-view" class="view hidden">
+        <section class="content audit-content">
+          <header class="content-header">
+            <div>
+              <h2>Spectral Drift Monitor</h2>
+              <p class="subtitle">
+                Comparing CVE embeddings: <strong>1999&ndash;2014</strong> (cve_99_14) vs <strong>1999&ndash;2025</strong> (cve_99_25).
+                Drift is measured via Wasserstein distance on the graph Laplacian eigenvalue distributions.
+              </p>
+            </div>
+            <button id="refresh-drift-btn" type="button">
+              Refresh Drift
+            </button>
+          </header>
+
+          <div class="audit-panels">
+            <!-- KPI row -->
+            <div class="audit-kpi-row">
+              <div class="panel audit-kpi-card">
+                <h3>Period A &mdash; 1999&ndash;2014</h3>
+                <div id="drift-kpi-a" class="metadata-grid"></div>
+              </div>
+              <div class="panel audit-kpi-card">
+                <h3>Period B &mdash; 1999&ndash;2025</h3>
+                <div id="drift-kpi-b" class="metadata-grid"></div>
+              </div>
+              <div class="panel audit-kpi-card">
+                <h3>Drift Metrics</h3>
+                <div id="drift-kpi-delta" class="metadata-grid"></div>
+              </div>
+              <div class="panel audit-kpi-card">
+                <h3>Spectral Gap &Delta;</h3>
+                <div id="drift-kpi-gap" class="metadata-grid"></div>
+              </div>
+            </div>
+
+            <!-- Overlaid eigenvalue histogram -->
+            <div class="panel audit-full-row">
+              <h3>Eigenvalue Distribution Overlay (&lambda; histogram)</h3>
+              <div id="drift-lambda-overlay" class="audit-plot-area"></div>
+              <div class="manifold-tooltip">
+                Blue = cve_99_14 &middot; Orange = cve_99_25 &middot; Overlap shows spectral shift between periods
+              </div>
+            </div>
+
+            <!-- ECDF comparison -->
+            <div class="panel audit-full-row">
+              <h3>Cumulative Spectral Mass (ECDF)</h3>
+              <div id="drift-ecdf" class="audit-plot-area"></div>
+              <div class="manifold-tooltip">
+                Vertical gap between curves = Kolmogorov&ndash;Smirnov statistic
+              </div>
+            </div>
+
+            <!-- PCA side-by-side -->
+            <div class="panel audit-full-row">
+              <h3>PCA Manifold: Period A vs Period B</h3>
+              <div id="drift-pca" class="audit-plot-area"></div>
+              <div class="manifold-tooltip">
+                Left = cve_99_14 &middot; Right = cve_99_25 &middot; Color = Laplacian degree (curvature proxy)
+              </div>
+            </div>
+
+            <!-- Fiedler value timeline -->
+            <div class="panel audit-full-row">
+              <h3>Fiedler Value &amp; Spectral Gap Timeline</h3>
+              <div id="drift-timeline" class="audit-plot-area"></div>
+              <div class="manifold-tooltip">
+                Fiedler value (&lambda;&#x2082;) controls graph connectivity &middot; higher = more connected / less driftable
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
     </main>
-    
+
     <div id="prompt-modal" class="prompt-modal hidden">
       <div class="prompt-modal-backdrop"></div>
 
       <div class="prompt-modal-content">
         <button id="prompt-modal-close" class="prompt-modal-close">
-          ×
+          &times;
         </button>
 
         <div id="prompt-modal-body"></div>
       </div>
     </div>
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <script type="module" src="./app.js?v=frontend8-cve"></script>
+    <script type="module" src="./app.js?v=cve1"></script>
   </body>
 </html>
