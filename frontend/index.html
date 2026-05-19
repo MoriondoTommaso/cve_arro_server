@@ -3,42 +3,24 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-    <title>CVE ArrowSpace</title>
-
+    <title>CVE Spectral Search Engine</title>
     <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
-
-    <link rel="stylesheet" href="./styles.css?v=cve1" />
+    <link rel="stylesheet" href="./styles.css?v=frontend9-cve" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   </head>
-
   <body>
     <header class="topbar">
       <div>
         <h1>CVE ArrowSpace</h1>
       </div>
-
       <nav class="app-tabs">
-        <button id="tab-search" class="tab-button active" type="button">
-          Search
-        </button>
-
-        <button id="tab-audit" class="tab-button" type="button">
-          Audit
-        </button>
-
-        <button id="tab-drift" class="tab-button" type="button">
-          Spectral Drift
-        </button>
+        <button id="tab-search" class="tab-button active" type="button">Search</button>
+        <button id="tab-audit"  class="tab-button"        type="button">Audit</button>
       </nav>
-
       <span id="health" class="health">Connecting...</span>
     </header>
 
@@ -47,138 +29,46 @@
       <section id="search-view" class="view active-view">
         <aside class="sidebar">
           <div class="sidebar-header">
-            <div class="sidebar-top">
-              <h2>CVE Search</h2>
-            </div>
-
-            <p>
-              Search the CVE corpus using natural language.
-            </p>
+            <div class="sidebar-top"><h2>CVE Search</h2></div>
+            <p>Search the CVE corpus using natural language.</p>
           </div>
-
           <div class="search-box">
-            <input
-              id="filter"
-              type="search"
-              placeholder="Search CVEs semantically..."
-            />
-
-            <span id="filter-status">
-              Ready for semantic search
-            </span>
+            <input id="filter" type="search" placeholder="Search CVEs semantically..." />
+            <span id="filter-status">Ready for semantic search</span>
           </div>
-
           <div class="search-results-panel">
             <div class="search-results-header">
               <span>Search Mode</span>
               <strong id="search-mode-label">Semantic search</strong>
             </div>
-
-            <p id="search-hint">
-              Type a query to search CVEs through /api/prompts/nl_search.
-            </p>
+            <p id="search-hint">Type a query to search CVEs through /api/prompts/nl_search.</p>
           </div>
-
           <div class="spectral-control">
-            <div class="spectral-label-row">
-              <label for="alpha-slider">
-                Spectral &#x2194; Cosine (&alpha;)
-              </label>
-
-              <span id="alpha-value">0.60</span>
-            </div>
-
-            <input
-              id="alpha-slider"
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value="0.6"
-            />
-
-            <p>
-              Semantic structure blend.
-              <strong>0 = pure spectral</strong> (graph Laplacian);
-              <strong>1 = pure cosine</strong> similarity.
-            </p>
+            <div class="spectral-label-row"><label for="alpha-slider">Spectral ↔ Cosine (α)</label><span id="alpha-value">0.60</span></div>
+            <input id="alpha-slider" type="range" min="0" max="1" step="0.01" value="0.6" />
+            <p>Semantic structure blend. <strong>0 = pure spectral</strong> (graph Laplacian); <strong>1 = pure cosine</strong> similarity.</p>
           </div>
-
           <div class="spectral-control">
-            <div class="spectral-label-row">
-              <label for="salience-slider">
-                Metadata Salience
-              </label>
-
-              <span id="salience-value">0.30</span>
-            </div>
-
-            <input
-              id="salience-slider"
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value="0.3"
-            />
-
-            <p>
-              Metadata reranking weight.
-              <strong>0 disables</strong> salience,
-              <strong>1 gives</strong> it full influence.
-            </p>
+            <div class="spectral-label-row"><label for="salience-slider">Metadata Salience</label><span id="salience-value">0.30</span></div>
+            <input id="salience-slider" type="range" min="0" max="1" step="0.01" value="0.3" />
+            <p>Metadata reranking weight. <strong>0 disables</strong> metadata salience, <strong>1 gives</strong> it full influence.</p>
           </div>
-
           <div class="spectral-control">
-            <div class="spectral-label-row">
-              <label for="topk-select">
-                Top-K results
-              </label>
-
-              <span id="topk-value">19</span>
-            </div>
-
+            <div class="spectral-label-row"><label for="topk-select">Top-K results</label><span id="topk-value">19</span></div>
             <select id="topk-select" class="leaf-select">
-              <option value="5">5</option>
-              <option value="10">10</option>
-              <option value="19" selected>19</option>
-              <option value="25">25</option>
-              <option value="50">50</option>
+              <option value="5">5</option><option value="10">10</option>
+              <option value="19" selected>19</option><option value="25">25</option><option value="50">50</option>
             </select>
-
-            <p>
-              Number of CVE results returned.
-              Default matches build-time topk (19).
-            </p>
+            <p>Number of CVE results returned.</p>
           </div>
-
           <div class="spectral-control">
-            <div class="spectral-label-row">
-              <label>Manifold Build Params</label>
-            </div>
-
-            <div id="build-params-display" class="build-params-display">
-              <code>eps=1.2311 &middot; k=38 &middot; topk=19 &middot; p=2.0 &middot; sigma=None</code>
-            </div>
-
-            <p>
-              ArrowSpace graph-Laplacian build parameters used to construct
-              the manifold index.
-            </p>
+            <div class="spectral-label-row"><label>Manifold Build Params</label></div>
+            <div id="build-params-display" class="build-params-display"><code>eps=1.2311 · k=38 · topk=19 · p=2.0 · sigma=None</code></div>
+            <p>ArrowSpace graph-Laplacian build parameters.</p>
           </div>
-
           <div class="spectral-control">
-            <div class="spectral-label-row">
-              <label>
-                Recent Searches
-              </label>
-            </div>
-
-            <div id="recent-searches" class="recent-searches">
-              <span class="signal-empty">
-                No recent searches
-              </span>
-            </div>
+            <div class="spectral-label-row"><label>Recent Searches</label></div>
+            <div id="recent-searches" class="recent-searches"><span class="signal-empty">No recent searches</span></div>
           </div>
         </aside>
 
@@ -186,44 +76,28 @@
           <header class="content-header">
             <div>
               <h2>Natural Language Search</h2>
-
-              <p class="subtitle">
-                Results are embedded and ranked server-side by ArrowSpace.
-              </p>
+              <p class="subtitle">Results ranked by CVE spectral similarity via ArrowSpace.</p>
             </div>
           </header>
-
           <div class="single-panel">
             <div id="grid" class="grid">
               <div class="welcome-screen">
-                <h2>CVE Semantic Search</h2>
-
-                <p>
-                  Try queries like &ldquo;buffer overflow&rdquo; or
-                  &ldquo;remote code execution&rdquo;.
-                </p>
+                <h2>CVE Spectral Search</h2>
+                <p>Try queries like "buffer overflow in network daemon" or "remote code execution via SQL injection".</p>
               </div>
             </div>
           </div>
-
           <div class="search-viz-grid">
-            <div class="panel">
-              <h3>Query Manifold View</h3>
+            <div class="panel"><h3>Query Manifold View</h3>
               <div class="manifold-plot-card">
                 <div id="query-manifold"></div>
-                <div id="query-manifold-tooltip" class="manifold-tooltip">
-                  Purple/red points = matched CVEs &middot; surface = corpus structure
-                </div>
+                <div id="query-manifold-tooltip" class="manifold-tooltip">Purple/red points = matched CVEs · surface = corpus structure</div>
               </div>
             </div>
-
-            <div class="panel">
-              <h3>Spectral Fingerprint</h3>
+            <div class="panel"><h3>Spectral Fingerprint</h3>
               <div class="manifold-plot-card">
                 <div id="query-lambda-chart"></div>
-                <div class="manifold-tooltip">
-                  Bars = eigenvalue density &middot; curve = cumulative spectral mass
-                </div>
+                <div class="manifold-tooltip">Bars = eigenvalue density · curve = cumulative spectral mass</div>
               </div>
             </div>
           </div>
@@ -236,65 +110,54 @@
           <header class="content-header">
             <div>
               <h2>CVE Audit Panel</h2>
-
-              <p class="subtitle">
-                Corpus health, graph Laplacian diagnostics and PCA map.
-              </p>
+              <p class="subtitle">Corpus health, graph Laplacian diagnostics and spectral drift monitoring.</p>
             </div>
-
-            <button id="refresh-audit-btn" type="button">
-              Refresh Audit
-            </button>
+            <button id="refresh-audit-btn" type="button">Refresh Audit</button>
           </header>
 
           <div id="audit-content" class="audit-panels">
             <div class="audit-kpi-row">
-              <div class="panel audit-kpi-card">
-                <h3>System Status</h3>
-                <div id="audit-health" class="metadata-grid"></div>
-              </div>
+              <div class="panel audit-kpi-card"><h3>System Status</h3><div id="audit-health" class="metadata-grid"></div></div>
+              <div class="panel audit-kpi-card"><h3>Corpus KPIs</h3><div id="audit-graph" class="metadata-grid"></div></div>
+              <div class="panel audit-kpi-card"><h3>Graph Statistics</h3><div id="audit-stats" class="metadata-grid"></div></div>
+              <div class="panel audit-kpi-card"><h3>Spectral Diagnostics</h3><div id="audit-lambdas" class="metadata-grid"></div></div>
+            </div>
 
-              <div class="panel audit-kpi-card">
-                <h3>Corpus KPIs</h3>
-                <div id="audit-graph" class="metadata-grid"></div>
+            <!-- SPECTRAL DRIFT MONITORING PANEL -->
+            <div class="panel audit-full-row" id="drift-panel">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
+                <h3 style="margin:0;">Spectral Drift Monitoring</h3>
+                <div style="display:flex;align-items:center;gap:1rem;">
+                  <span id="drift-score-badge" style="display:none;font-size:0.75rem;font-weight:600;padding:0.25rem 0.75rem;border-radius:9999px;background:var(--color-surface-offset,#edeae5);color:var(--color-text,#28251d);letter-spacing:0.02em;">W₁ drift: —</span>
+                  <button id="run-drift-btn" type="button" style="padding:0.35rem 0.9rem;font-size:0.8rem;border-radius:6px;border:1px solid var(--color-border,#d4d1ca);background:var(--color-surface,#f9f8f5);cursor:pointer;">Run Drift Analysis</button>
+                </div>
               </div>
-
-              <div class="panel audit-kpi-card">
-                <h3>Graph Statistics</h3>
-                <div id="audit-stats" class="metadata-grid"></div>
+              <div class="manifold-tooltip" style="margin-bottom:0.75rem;">
+                Period A: <strong>cve_99_14.zarr</strong> (1999–2014) &nbsp;·&nbsp;
+                Period B: <strong>cve_99_25.zarr</strong> (1999–2025) &nbsp;·&nbsp;
+                Overlay of normalised eigenvalue histograms — shape divergence = spectral drift
               </div>
-
-              <div class="panel audit-kpi-card">
-                <h3>Spectral Diagnostics</h3>
-                <div id="audit-lambdas" class="metadata-grid"></div>
-              </div>
+              <div id="drift-chart" style="width:100%;height:340px;"></div>
+              <div id="drift-status" class="manifold-tooltip" style="margin-top:0.5rem;">Opening Audit tab auto-loads drift data.</div>
             </div>
 
             <div class="panel audit-full-row">
               <h3>Graph Laplacian Manifold</h3>
               <div id="audit-query-manifold" class="audit-plot-area"></div>
-              <div class="manifold-tooltip">
-                Surface = corpus Laplacian degree (L&#x1D56;&#x1D56;) over PCA-2D &middot; diamonds = high-degree hubs &middot; red = matched CVEs
-              </div>
+              <div class="manifold-tooltip">Surface = corpus Laplacian degree (Lᵢᵢ) over PCA-2D · diamonds = high-degree hubs · red = matched CVEs</div>
             </div>
 
             <div class="panel audit-full-row">
               <h3>Spectral Fingerprint</h3>
               <div id="audit-spectral-fingerprint" class="audit-plot-area"></div>
-              <div class="manifold-tooltip">
-                Top = &lambda; histogram clipped at p60 &middot; Bottom = ECDF over [0, &lambda;_max] with p25/median/p75 markers
-              </div>
+              <div class="manifold-tooltip">Top = λ histogram clipped at p60 · Bottom = ECDF over [0, λ_max] with p25/median/p75 markers</div>
             </div>
 
             <div class="panel audit-half-row">
               <h3>PCA 2D Map</h3>
               <div class="manifold-plot-card">
-                <div class="manifold-canvas-stack">
-                  <canvas id="audit-pca"></canvas>
-                </div>
-                <div id="audit-pca-tooltip" class="manifold-tooltip">
-                  Hover points
-                </div>
+                <div class="manifold-canvas-stack"><canvas id="audit-pca"></canvas></div>
+                <div id="audit-pca-tooltip" class="manifold-tooltip">Hover points</div>
               </div>
             </div>
           </div>
@@ -380,16 +243,13 @@
 
     <div id="prompt-modal" class="prompt-modal hidden">
       <div class="prompt-modal-backdrop"></div>
-
       <div class="prompt-modal-content">
-        <button id="prompt-modal-close" class="prompt-modal-close">
-          &times;
-        </button>
-
+        <button id="prompt-modal-close" class="prompt-modal-close">×</button>
         <div id="prompt-modal-body"></div>
       </div>
     </div>
+
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <script type="module" src="./app.js?v=cve1"></script>
+    <script type="module" src="./app.js?v=frontend9-cve"></script>
   </body>
 </html>
