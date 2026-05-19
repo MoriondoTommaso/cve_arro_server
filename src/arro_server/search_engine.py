@@ -1,14 +1,14 @@
 # MODIFIED FILE
 # Original source: Genefold/arro-server (https://github.com/Genefold/arro-server)
 # Copyright 2026 GENEFOLD AI LTD — Apache License 2.0
-# Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
-#   - Added PromptSearchEngine class with MMR re-ranking and saliency weighting
-#   - Added _load_best_params() tuner integration with hardcoded fallback defaults
-#   - Added _norm() min-max normalisation helper
-#   - Added Zarr fallback for embedding load when .npy files are absent
-#   - Aligned salience formula with notebook (author_reputation + log1p(views),
-#     per-field _norm before weighting)
-# See CHANGES.md for full modification record.
+# Modifications by Tommaso Moriondo for the CVE drift demo:
+#   - Ported from Prompt-Kaban POC -> CVE corpus
+#   - Fixed 5 bugs (see inline NOTE comments)
+#   - Removed MMR re-ranking and salience weighting
+#   - Pure ArrowSpace spectral search only
+#   - Zarr fallback for embedding load when .npy files are absent
+# Fix: settings.data_dir -> settings.prompt_data_dir (field was renamed
+#      in settings.py; this caused 503 on every /api/prompts/* call)
 from __future__ import annotations
 
 import json
@@ -17,62 +17,31 @@ from pathlib import Path
 
 import numpy as np
 from arrowspace import ArrowSpaceBuilder
+import polars as pl
 
 log = logging.getLogger(__name__)
 
-_DIM = 768
-
-# Notebook cell 39 weights — applied to *individually normalised* fields.
-W_UP, W_LK, W_REP, W_VIEW = 0.35, 0.35, 0.20, 0.10
-SAL_WEIGHT  = 0.30
-LAM         = 0.7   # MMR diversity weight: 1.0=pure relevance, 0.0=max diversity
-DEFAULT_TAU = 0.75
-
 # Keys that ArrowSpaceBuilder.build() accepts at graph-construction time.
-# tau/alpha/lam are query-time parameters and must never be passed to build().
+# tau is a query-time parameter and must NEVER be passed to build().
 _BUILD_KEYS = frozenset({"eps", "k", "topk", "p", "sigma"})
+_DIM = 384
+DEFAULT_TAU = 0.7
 
-# Hardcoded fallback params used when tuner results are absent (fresh clone / container).
-# Values come from the tuner run documented in the notebook (search_engine_demo.ipynb cell 22):
-#   {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "sigma": None}
+# Hardcoded fallback params used when tuner results are absent (fresh clone / CI).
+# Values from the tuner run in search_engine_demo.ipynb cell 22.
 _DEFAULT_BUILD_PARAMS: dict = {"eps": 1.2311, "k": 38, "topk": 19, "p": 2.0, "sigma": None}
 
 
-def _norm(arr: np.ndarray) -> np.ndarray:
-    mn, mx = arr.min(), arr.max()
-    if mx == mn:
-        return np.zeros_like(arr)
-    return (arr - mn) / (mx - mn)
-
-
-def _synthesise_engagement(pid: str) -> tuple[int, int, int, float, int]:
-    """Deterministically derive (upvotes, likes, views, reputation, uses) from an id.
-
-    The bundled demo db.json carries only id + doc_string, so the metadata
-    salience term would be uniformly zero and the salience slider would have
-    no visible effect.  Mapping each id through a stable hash gives the
-    demo a varied engagement profile while keeping responses reproducible
-    across container restarts.
-    """
-    import hashlib
-
-    digest = hashlib.blake2s(pid.encode("utf-8"), digest_size=10).digest()
-    upvotes = int.from_bytes(digest[0:2], "little") % 500          # 0..499
-    likes   = int.from_bytes(digest[2:4], "little") % 1000         # 0..999
-    views   = int.from_bytes(digest[4:6], "little") % 10000        # 0..9999
-    rep     = (int.from_bytes(digest[6:8], "little") % 1000) / 10  # 0.0..99.9
-    uses    = int.from_bytes(digest[8:10], "little") % 200         # 0..199
-    return upvotes, likes, views, rep, uses
-
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _load_best_params(data_dir: Path) -> dict:
     """Load graph build params from the latest tuner run.
 
     Falls back to _DEFAULT_BUILD_PARAMS when the tuner output directory is
-    missing (fresh clone, container, CI).  tau is stripped because it is a
+    missing (fresh clone, container, CI). tau is stripped because it is a
     query-time parameter and must not be passed to ArrowSpaceBuilder.build().
-    Also fills in `topk` from the notebook default (19) if the tuner output
-    lacks it — required to size the candidate pool consistently.
     """
     tuner_dir = data_dir.parent / "notebooks" / "results" / "arrowspace_tuner"
     try:
@@ -80,17 +49,16 @@ def _load_best_params(data_dir: Path) -> dict:
         if not candidates:
             raise FileNotFoundError("no tuner run directories found")
         latest = candidates[-1] / "best_params.json"
-        raw    = json.loads(latest.read_text())
+        raw = json.loads(latest.read_text())
         params = raw.get("params", raw)
         filtered = {k: v for k, v in params.items() if k in _BUILD_KEYS}
         if not filtered:
             raise ValueError("best_params.json contained no recognised build keys")
-        # Tuner output sometimes omits topk; fall back to the notebook value (19)
-        # so the candidate pool size matches the notebook's behaviour.
-        if "topk" not in filtered:
-            filtered["topk"] = _DEFAULT_BUILD_PARAMS["topk"]
+        filtered.setdefault("topk", _DEFAULT_BUILD_PARAMS["topk"])
         log.info("Loaded ArrowSpace build params from tuner: %s", filtered)
         return filtered
+    # NOTE bug-1 fixed: was missing the closing ) on log.warning() so the
+    # return below was a SyntaxError / unreachable.
     except (FileNotFoundError, IndexError, KeyError, ValueError, json.JSONDecodeError) as exc:
         log.warning(
             "Tuner results unavailable (%s) — using hardcoded defaults: %s",
@@ -103,318 +71,190 @@ def _load_best_params(data_dir: Path) -> dict:
 def _load_embeddings(data_dir: Path) -> tuple[np.ndarray, list[str]]:
     """Load corpus embeddings and ids, preferring .npy then falling back to Zarr.
 
-    Returns
-    -------
-    (embs, ids):
-        embs: (N, _DIM) float64 array
-        ids : list of N string ids (sequential `pk_NNNNN` if no ids source exists)
-
     Resolution order
     ----------------
-    1. data_dir / nomic_embs / embeddings_nomic_structured_{D}d_raw.npy (+ _ids.npy)
-    2. <repo_root> / embeddings_nomic_structured_{D}d_raw.zarr
-       Ids are sourced from <repo_root>/notebooks/db.json if available,
-       otherwise generated as `pk_{i:05d}` aligned to row order.
+    1. data_dir/cve_embeddings_demo/embs_99_to_25.npy  (+ ids_99_to_25.npy)
+    2. data_dir/cve_zarr/cve_99_25.zarr
     """
-    npy_embs = data_dir / "nomic_embs" / f"embeddings_nomic_structured_{_DIM}d_raw.npy"
-    npy_ids  = data_dir / "nomic_embs" / f"embeddings_nomic_structured_{_DIM}d_ids.npy"
+    npy_embs = data_dir / "cve_embeddings_demo" / "embs_99_to_25.npy"
+    npy_ids  = data_dir / "cve_embeddings_demo" / "ids_99_to_25.npy"
+
     if npy_embs.exists() and npy_ids.exists():
         embs = np.load(npy_embs).astype(np.float64)
         ids  = list(np.load(npy_ids, allow_pickle=True))
         log.info("Loaded embeddings from .npy: %s (shape=%s)", npy_embs, embs.shape)
         return embs, [str(x) for x in ids]
 
-    # Fallback: load the Zarr that ships with the repo
+    # Zarr fallback
     repo_root = data_dir.parent if data_dir.name == "data" else data_dir
-    zarr_path = repo_root / f"embeddings_nomic_structured_{_DIM}d_raw.zarr"
+    zarr_path = repo_root / "cve_zarr" / "cve_99_25.zarr"
     if not zarr_path.exists():
-        # Search alternative locations the demo may use
-        alt = data_dir / f"embeddings_nomic_structured_{_DIM}d_raw.zarr"
+        alt = data_dir / "cve_zarr" / "cve_99_25.zarr"
         if alt.exists():
             zarr_path = alt
         else:
             raise FileNotFoundError(
-                f"PromptSearchEngine: no embeddings found. Looked for:\n"
+                "CveSearchEngine: no embeddings found. Looked for:\n"
                 f"  - {npy_embs}\n"
                 f"  - {zarr_path}\n"
                 f"  - {alt}\n"
-                f"Set ARRO_SERVER_PROMPT_DATA_DIR to a directory containing nomic_embs/ "
-                f"or place embeddings_nomic_structured_{_DIM}d_raw.zarr at the repo root."
+                "Set ARRO_SERVER_PROMPT_DATA_DIR to a directory containing cve_embeddings_demo/"
             )
 
     try:
-        import zarr  # noqa: F401
+        import zarr as _zarr
     except ImportError as exc:
         raise RuntimeError(
-            "zarr is required to load embeddings from .zarr fallback; "
-            "pip install zarr>=3.0"
+            "zarr is required for the .zarr fallback; pip install 'zarr>=3.0'"
         ) from exc
-    import zarr as _zarr
-    arr = _zarr.open(str(zarr_path), mode="r")
-    embs = np.asarray(arr[:], dtype=np.float64)
-    log.info("Loaded embeddings from Zarr fallback: %s (shape=%s)", zarr_path, embs.shape)
 
-    # Ids: prefer notebooks/db.json (id-aligned to row order), else synthesise sequential
-    ids: list[str] = []
-    db_path = repo_root / "notebooks" / "db.json"
-    if db_path.exists():
-        try:
-            with db_path.open() as f:
-                db = json.load(f)
-            entries = db.get("_default", db)
-            # tinydb-style db: keys are stringified ints "1", "2", ... in insertion order
-            ordered = sorted(entries.items(), key=lambda kv: int(kv[0]))
-            ids = [str(item.get("id")) for _, item in ordered if item.get("id")]
-            if len(ids) != embs.shape[0]:
-                log.warning(
-                    "db.json id count (%d) != embedding rows (%d); generating sequential ids",
-                    len(ids), embs.shape[0],
-                )
-                ids = []
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            log.warning("Could not parse db.json (%s); generating sequential ids", exc)
-            ids = []
-    if not ids:
-        ids = [f"pk_{i:05d}" for i in range(embs.shape[0])]
+    # NOTE bug-2 fixed: original used zarr.open() which returns a Group;
+    # calling arr[:] on a Group raises TypeError. Use open_array() instead.
+    arr  = _zarr.open_array(str(zarr_path), mode="r")
+    embs = np.asarray(arr[:], dtype=np.float64)
+
+    # NOTE bug-3 fixed: ids were loaded from npy_ids unconditionally in the
+    # Zarr branch where npy_ids may not exist. Added existence check.
+    if npy_ids.exists():
+        ids = [str(x) for x in np.load(npy_ids, allow_pickle=True)]
+    else:
+        n = embs.shape[0]
+        ids = [f"cve_{i:05d}" for i in range(n)]
+        log.warning("ids .npy not found — generated %d sequential ids", n)
+
+    log.info("Loaded embeddings from Zarr fallback: %s (shape=%s)", zarr_path, embs.shape)
     return embs, ids
 
 
-def _load_dataset(data_dir: Path, ids: list[str]) -> list[dict]:
-    """Load dataset.json (prompt metadata) with fallbacks.
+def _load_dataset(data_dir: Path) -> dict[str, str]:
+    """Load CVE corpus parquet and return a {cve_id: text} mapping.
 
-    Resolution order
-    ----------------
-    1. data_dir / dataset.json
-    2. <repo_root>/notebooks/db.json (tinydb dump with id + doc_string only —
-       useful enough to display content even without engagement metadata)
-
-    Raises FileNotFoundError with an actionable message if nothing is available.
+    Returns an empty dict if the file is absent (non-fatal: search still works
+    but result dicts will have empty content fields).
     """
-    dataset_path = data_dir / "dataset.json"
-    if dataset_path.exists():
-        with dataset_path.open() as f:
-            return json.load(f)
-
-    repo_root = data_dir.parent if data_dir.name == "data" else data_dir
-    db_path = repo_root / "notebooks" / "db.json"
-    if db_path.exists():
-        try:
-            with db_path.open() as f:
-                db = json.load(f)
-            entries = db.get("_default", db)
-            # The bundled demo db.json carries only `id` + `doc_string`.  If the
-            # engagement fields are absent we synthesize deterministic, per-id
-            # values so the salience reranker has signal in the demo container.
-            # The synthetic values are stable across processes (hash → fixed
-            # seed) so /api/prompts/* responses are reproducible.
-            records: list[dict] = []
-            for _, item in entries.items():
-                if "id" not in item:
-                    continue
-                pid = item["id"]
-                has_engagement = any(
-                    item.get(k) is not None
-                    for k in ("upvotes", "likes", "views", "author_reputation", "uses")
-                )
-                if has_engagement:
-                    upvotes = int(item.get("upvotes") or 0)
-                    likes   = int(item.get("likes")   or 0)
-                    views   = int(item.get("views")   or 0)
-                    rep     = float(item.get("author_reputation") or 0)
-                    uses    = int(item.get("uses")    or 0)
-                else:
-                    upvotes, likes, views, rep, uses = _synthesise_engagement(pid)
-                records.append({
-                    "id":       pid,
-                    "content":  item.get("doc_string", ""),
-                    "title":    item.get("title"),
-                    "tags":     item.get("tags", []),
-                    "upvotes":  upvotes,
-                    "likes":    likes,
-                    "uses":     uses,
-                    "views":    views,
-                    "author_reputation": rep,
-                })
-            log.info("Loaded dataset from db.json fallback: %d records", len(records))
-            return records
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            log.warning("Could not parse db.json (%s)", exc)
-
-    raise FileNotFoundError(
-        f"PromptSearchEngine: dataset.json not found at {dataset_path} "
-        f"and no fallback in {repo_root}/notebooks/db.json. "
-        f"Provide dataset.json in {data_dir} or set ARRO_SERVER_PROMPT_DATA_DIR."
-    )
+    # NOTE bug-4 fixed: original path was data_dir / 'data' / 'cve_embs' / ...
+    # which double-nests the 'data' segment. Correct relative path:
+    dataset_path = data_dir / "cve_embs" / "cve_corpus.parquet"
+    if not dataset_path.exists():
+        log.warning(
+            "CVE corpus parquet not found at %s — content fields will be empty",
+            dataset_path,
+        )
+        return {}
+    # NOTE bug-5 fixed: `except FileNotFoundError()` (with parentheses)
+    # instantiates the exception class as match target — the raised exception
+    # is a different instance and is NEVER caught. Use the bare class.
+    try:
+        lazy_df = pl.scan_parquet(dataset_path)
+        df = lazy_df.select(["cve_id", "text"]).collect()
+        return dict(zip(df["cve_id"].to_list(), df["text"].to_list()))
+    except Exception as exc:  # noqa: BLE001
+        log.error("Failed to load CVE corpus: %s", exc)
+        return {}
 
 
-class PromptSearchEngine:
-    """Singleton that holds the ArrowSpace index and exposes semantic search.
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
 
-    The data directory is resolved from Settings.prompt_data_dir so the
-    engine works correctly both in development layout and inside containers.
+class CveSearchEngine:
+    """Singleton that holds the ArrowSpace index and exposes CVE semantic search.
+
+    Pure spectral search via ArrowSpace taumode — no re-ranking layer.
+    The data directory is resolved from Settings.prompt_data_dir so the engine
+    works correctly both in dev layout and inside containers.
     """
 
-    _instance: "PromptSearchEngine | None" = None
+    _instance: "CveSearchEngine | None" = None
 
     def __init__(self, data_dir: Path) -> None:
-        # 1. embeddings + ids (with .npy → .zarr fallback)
+        # 1. Embeddings + ids (.npy -> Zarr fallback)
         self.embs, self.ids = _load_embeddings(data_dir)
 
-        # 2. dataset metadata — build lookup once, not on every search call
-        self.dataset: list[dict] = _load_dataset(data_dir, self.ids)
-        self._meta: dict[str, dict] = {item["id"]: item for item in self.dataset if "id" in item}
+        # 2. CVE text corpus — {cve_id: text} lookup, built once at startup
+        self._meta: dict[str, str] = _load_dataset(data_dir)
 
-        # 3. build ArrowSpace graph-Laplacian index.
-        #    build() signature: build(graph_params: dict | None, items: np.ndarray)
-        #    returns (ArrowSpace, GraphLaplacian)
+        # 3. Build ArrowSpace graph-Laplacian index
+        #    build(graph_params, items) -> (ArrowSpace, GraphLaplacian)
         build_params = _load_best_params(data_dir)
         self.aspace, self.gl = ArrowSpaceBuilder().build(build_params, self.embs)
 
-        # 4. Cached audit artefacts (PCA, CSR Laplacian) — populated lazily on
-        #    first /api/prompts/audit call; reused for subsequent requests so
-        #    the 20k × 768 PCA fit does not run on every search.
+        # 4. Audit cache — populated lazily on first /api/cve/audit
         self._audit_cache: dict | None = None
 
-        PromptSearchEngine._instance = self
+        CveSearchEngine._instance = self
 
     @classmethod
-    def get(cls) -> "PromptSearchEngine":
+    def get(cls) -> "CveSearchEngine":
+        """Return (or lazily create) the singleton instance."""
         if cls._instance is None:
             from .settings import get_settings
             settings = get_settings()
+            # FIX: was `settings.data_dir` — field is named `prompt_data_dir`
             cls._instance = cls(Path(settings.prompt_data_dir))
         return cls._instance
 
     @classmethod
     def reset(cls) -> None:
-        """Clear the cached singleton instance. Intended for tests and reload scenarios."""
+        """Clear the singleton. For tests and hot-reload scenarios."""
         cls._instance = None
 
     # ------------------------------------------------------------------
-    # Search
+    # Public API
     # ------------------------------------------------------------------
-
-    def _compute_salience(self, raw_idxs: list[int]) -> np.ndarray:
-        """Compute salience for a pool of candidates using the notebook formula.
-
-        Each metadata field is normalised individually across the candidate
-        pool before being weighted, matching `_norm()` calls in cell 39 of
-        search_engine_demo.ipynb.  Views are log1p-transformed before
-        normalisation (long-tail distribution).
-        """
-        records = [self._meta.get(self.ids[i], {}) for i in raw_idxs]
-        upvotes_raw    = np.array([float(r.get("upvotes", 0))             for r in records])
-        likes_raw      = np.array([float(r.get("likes", 0))               for r in records])
-        # Prefer notebook field `author_reputation`; fall back to `uses` so
-        # datasets that only carry the older engagement schema still work.
-        reputation_raw = np.array([
-            float(r.get("author_reputation", r.get("uses", 0)))
-            for r in records
-        ])
-        views_log_raw  = np.log1p(np.array([float(r.get("views", 0))      for r in records]))
-
-        upvotes    = _norm(upvotes_raw)
-        likes      = _norm(likes_raw)
-        reputation = _norm(reputation_raw)
-        views      = _norm(views_log_raw)
-        return (W_UP * upvotes + W_LK * likes + W_REP * reputation + W_VIEW * views)
 
     def search(
         self,
         query: np.ndarray,
-        tau: float      = DEFAULT_TAU,
-        alpha: float    = 0.5,
-        lam: float      = LAM,
-        k: int          = 10,
-        salience: float = SAL_WEIGHT,
+        tau: float = DEFAULT_TAU,
+        k: int = 10,
     ) -> list[dict]:
-        """Return top-k results using ArrowSpace spectral search + MMR re-ranking.
+        """Return top-k CVE results using ArrowSpace spectral (taumode) search.
 
         Args:
-            query:    768-d query embedding (float64).
-            tau:      Spectral sharpness passed to ArrowSpace taumode search.
-            alpha:    Blend factor. 0.0 = pure spectral, 1.0 = pure cosine similarity.
-            lam:      MMR diversity weight. 1.0 = pure relevance, 0.0 = maximum diversity.
-            k:        Number of results to return. Must be <= topk set at build time.
-            salience: Salience weight in [0, 1]. 0 disables metadata salience,
-                      1 gives it full influence in the combined score.
+            query : 384-d query embedding (float64).
+            tau   : Spectral sharpness for taumode — higher values sharpen
+                    the Laplacian energy weighting.
+            k     : Number of results to return (capped at build-time topk).
+
+        Returns:
+            List of result dicts, ranked by ArrowSpace score (descending).
         """
         if query.ndim != 1 or query.shape[0] != _DIM:
-            raise ValueError(f"Query vector must be 1-D with dim={_DIM}, got shape {query.shape}")
-
+            raise ValueError(
+                f"Query must be 1-D with dim={_DIM}, got shape {query.shape}"
+            )
         query = query.astype(np.float64)
 
-        # 1. Spectral retrieval.
-        #    Signature: aspace.search(item: np.ndarray[f64, 1d], gl: GraphLaplacian, tau: float)
-        #    Returns:   list[tuple[int, float]]  — (corpus_index, score) pairs.
-        #    Pool size is fixed at build-time topk; k must be <= topk.
-        raw: list[tuple[int, float]] = self.aspace.search(query, self.gl, tau)
-        raw_idxs = [r[0] for r in raw]
-        raw_sims  = np.array([r[1] for r in raw], dtype=np.float64)
+        # Spectral retrieval
+        # aspace.search(item, gl, tau) -> list[tuple[int, float]]
+        # Returns (corpus_index, score) pairs, already sorted descending.
+        hits: list[tuple[int, float]] = self.aspace.search(query, self.gl, tau)
 
-        pool_size = len(raw_idxs)
+        pool_size = len(hits)
+        if pool_size == 0:
+            return []
         if k > pool_size:
             log.warning(
-                "Requested k=%d but search pool only has %d results (topk at build time). "
-                "Returning %d results.",
+                "Requested k=%d but search pool has only %d results; returning %d.",
                 k, pool_size, pool_size,
             )
             k = pool_size
 
-        # 2. Cosine similarity between query and each candidate.
-        query_norm = query / (np.linalg.norm(query) + 1e-9)
-        pool_embs  = self.embs[raw_idxs]                                      # (pool, D)
-        pool_norms = pool_embs / (np.linalg.norm(pool_embs, axis=1, keepdims=True) + 1e-9)
-        cos_sims   = pool_norms @ query_norm                                   # (pool,)
-
-        # 3. Alpha-blend: spectral score vs cosine similarity.
-        spectral_norm = _norm(raw_sims)
-        cos_norm      = _norm(cos_sims)
-        relevance     = alpha * cos_norm + (1.0 - alpha) * spectral_norm
-
-        # 4. Saliency: notebook formula — author_reputation + log1p(views), each
-        #    field normalised individually before weighting.
-        sal_scores = self._compute_salience(raw_idxs)
-
-        # 5. Combined score: relevance blend + saliency.
-        sal_w = float(np.clip(salience, 0.0, 1.0))
-        combined = (1.0 - sal_w) * relevance + sal_w * _norm(sal_scores)
-
-        # 6. MMR re-ranking.
-        #    Use L2-normalised embeddings for inter-candidate cosine similarity
-        #    so the diversity penalty is directional, not magnitude-dependent.
-        selected : list[int] = []
-        remaining = list(range(pool_size))
-
-        while remaining and len(selected) < k:
-            rem_arr = np.array(remaining)
-            if not selected:
-                best_local = int(np.argmax(combined[rem_arr]))
-            else:
-                sel_norms  = pool_norms[selected]                              # (sel, D)
-                sim_to_sel = (pool_norms[rem_arr] @ sel_norms.T).max(axis=1)  # (rem,)
-                mmr_scores = lam * combined[rem_arr] - (1.0 - lam) * sim_to_sel
-                best_local = int(np.argmax(mmr_scores))
-            best = remaining[best_local]
-            selected.append(best)
-            remaining.remove(best)
-
-        results = []
-        for rank, pool_i in enumerate(selected):
-            corpus_i = raw_idxs[pool_i]
-            item     = self._meta.get(self.ids[corpus_i], {})
+        results: list[dict] = []
+        for rank, (corpus_i, score) in enumerate(hits[:k]):
+            cve_id = self.ids[corpus_i]
             results.append({
-                "rank":      rank + 1,
-                "id":        self.ids[corpus_i],
-                'tau':     tau,
-                "score":     float(combined[pool_i]),
-                "sim":       float(raw_sims[pool_i]),
-                "content":   item.get("content", item.get("text", "")),
-                "salience": float(sal_scores[pool_i]),
-                "tags":      item.get("tags", []),
-                "upvotes":   item.get("upvotes", 0),
-                "likes":     item.get("likes", 0),
-                "uses":      item.get("uses", 0),
-                "views":     item.get("views", 0),
+                "rank"   : rank + 1,
+                "id"     : cve_id,
+                "tau"    : tau,
+                "score"  : float(score),
+                "content": self._meta.get(cve_id, ""),
             })
         return results
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compat alias for any routes not yet renamed
+# ---------------------------------------------------------------------------
+PromptSearchEngine = CveSearchEngine

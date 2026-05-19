@@ -4,11 +4,17 @@
 # Modifications by Tommaso Moriondo for the LEAF Prompt-Kaban POC:
 #   - Added `prompt_data_dir` field for LEAF Kaban data volume path
 #   - Added `embedder_model` field for HuggingFace model id override
+# Modifications for CVE spectral drift demo:
+#   - Added `cve_period_a` / `cve_period_b` fields
+#   - Added `cve_n_sample` field controlling subsampling in the drift engine
+#   - FIX: cve_period_a/b defaults are CWD-relative strings (not __file__-absolute)
+# Fix: embedder_model default changed from nomic-ai/nomic-embed-text-v1.5 (768-dim)
+#      to all-MiniLM-L6-v2 (384-dim) to match the CVE corpus embeddings.
 # See CHANGES.md for full modification record.
 from __future__ import annotations
 
 import logging
-from functools import cached_property, lru_cache
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
@@ -30,6 +36,25 @@ class Settings(BaseSettings):
     ``cors_origins`` accepts a comma-separated list of allowed origins, e.g.
     ``ARRO_SERVER_CORS_ORIGINS=https://app.example.com,https://admin.example.com``.
     Use ``*`` (the default) to allow all origins — do not use ``*`` in production.
+
+    Embedder
+    --------
+    ``embedder_model`` selects the SentenceTransformer model used by
+    ``EmbedderService`` for natural-language search.
+    Must produce 384-dim vectors to match the CVE corpus.
+    Default: ``sentence-transformers/all-MiniLM-L6-v2``
+    Override: ``ARRO_SERVER_EMBEDDER_MODEL=<hf-model-id>``
+
+    CVE drift paths
+    ---------------
+    ``cve_period_a`` / ``cve_period_b`` default to relative paths
+    ``data/cve_embeddings_demo/embs_99_to_14.npy`` and
+    ``data/cve_embeddings_demo/embs_15_to_2025.npy`` resolved against the
+    process CWD at runtime.  Override via ``ARRO_SERVER_CVE_PERIOD_A`` /
+    ``ARRO_SERVER_CVE_PERIOD_B``.
+
+    ``cve_n_sample`` controls how many rows are passed to ArrowSpaceBuilder.
+    Defaults to 8 000; set to 0 to disable subsampling.
     """
 
     model_config = SettingsConfigDict(
@@ -41,30 +66,22 @@ class Settings(BaseSettings):
 
     data_roots: Annotated[list[str], NoDecode] = Field(default_factory=list)
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
-    # default_window: rows returned by /data when ?limit is omitted.
     default_window: int = 100
-    # max_window: hard cap on the number of *rows* (leading-axis elements)
-    # returned in a single /data or /slice response. Note that for N-D arrays
-    # the total element count is max_window * product(shape[1:]).
     max_window: int = 10_000
     serve_frontend: bool = True
     frontend_dir: str | None = None
-    # Directory where graph-Laplacian Zarr arrays are persisted.
     index_store: str = "./arrowspace_index"
-    # Maximum number of ArrowSpace indices to keep in memory simultaneously.
-    # Oldest entry is evicted when the limit is reached.
     index_cache_size: int = 8
 
-    # ── Prompt search (LEAF Kaban) ───────────────────────────────────────────
-    # Directory that contains dataset.json and nomic_embs/.
-    # Defaults to the `data/` sibling of the package root so the dev layout
-    # (repo/data/) works without any env var.  Set ARRO_SERVER_PROMPT_DATA_DIR
-    # in containers / deployments to point at the mounted data volume.
-    prompt_data_dir: str = str(Path(__file__).parents[2] / "data")
+    # ── Prompt / CVE search ─────────────────────────────────────────────
+    prompt_data_dir: str = "./data"
+    # FIX: was nomic-ai/nomic-embed-text-v1.5 (768-dim) — corpus is 384-dim
+    embedder_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
-    # HuggingFace model id used by EmbedderService.
-    # Override if you want to swap in a different nomic-compatible model.
-    embedder_model: str = "nomic-ai/nomic-embed-text-v1.5"
+    # ── CVE spectral drift (two-period demo) ───────────────────────────────
+    cve_period_a: str = "data/cve_embeddings_demo/embs_99_to_14.npy"
+    cve_period_b: str = "data/cve_embeddings_demo/embs_15_to_2025.npy"
+    cve_n_sample: int = 8_000
 
     @field_validator("data_roots", "cors_origins", mode="before")
     @classmethod
@@ -73,17 +90,9 @@ class Settings(BaseSettings):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
 
-    @cached_property
-    def resolved_roots(self) -> dict[str, Path]:  # type: ignore[override]
-        """Return mapping of root label -> filesystem path.
-
-        Roots may be specified as ``path`` or ``label=path``.
-        Unlabeled roots are auto-named after their directory basename, with
-        numeric suffixes on collision.
-
-        Cached as a ``cached_property`` — resolved only once per Settings
-        instance, avoiding repeated ``Path.resolve()`` syscalls per request.
-        """
+    @property
+    def resolved_roots(self) -> dict[str, Path]:
+        """Return mapping of root label -> filesystem path."""
         out: dict[str, Path] = {}
         for entry in self.data_roots:
             if "=" in entry:
@@ -112,10 +121,7 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the process-wide Settings singleton.
-
-    Use ``get_settings.cache_clear()`` in tests to reset between cases.
-    """
+    """Return the process-wide Settings singleton."""
     s = Settings()
     s.warn_insecure_defaults()
     return s

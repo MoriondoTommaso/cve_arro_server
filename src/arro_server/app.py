@@ -20,18 +20,16 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Warm up the embedder and prompt search engine at startup.
+    """Warm up optional services at startup.
 
-    Both are optional — if the data directory is missing (e.g. running only
-    the Zarr/dataset endpoints) the server still starts; endpoints that need
+    All three services are optional — if their data directories or
+    dependencies are missing the server still starts; endpoints that need
     them will return 503 on first request.
     """
-    settings = get_settings()
-
     # --- warm EmbedderService ---
     try:
         from .embedder import EmbedderService
-        EmbedderService.get()  # loads model weights, caches singleton
+        EmbedderService.get()
         log.info("EmbedderService warmed up successfully")
     except Exception as exc:
         log.warning("EmbedderService warm-up skipped: %s", exc)
@@ -39,13 +37,20 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # --- warm PromptSearchEngine ---
     try:
         from .search_engine import PromptSearchEngine
-        PromptSearchEngine.get()  # builds ArrowSpace index, caches singleton
+        PromptSearchEngine.get()
         log.info("PromptSearchEngine warmed up successfully")
     except Exception as exc:
         log.warning("PromptSearchEngine warm-up skipped: %s", exc)
 
+    # --- warm CveDriftEngine ---
+    try:
+        from .drift_engine import CveDriftEngine
+        CveDriftEngine.get()
+        log.info("CveDriftEngine warmed up successfully")
+    except Exception as exc:
+        log.warning("CveDriftEngine warm-up skipped: %s", exc)
+
     yield  # application is now running
-    # (shutdown logic here if needed in future)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -73,12 +78,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.frontend_dir:
             frontend_dir = Path(settings.frontend_dir)
         else:
-            # Development layout: <repo>/frontend/
             _dev = Path(__file__).parent.parent.parent / "frontend"
             if _dev.exists():
                 frontend_dir = _dev
             else:
-                # Installed wheel: share/arro_server/frontend (hatch shared-data)
                 try:
                     _pkg = (
                         importlib.resources.files("arro_server")
@@ -90,8 +93,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 except Exception:
                     pass
         if frontend_dir and frontend_dir.exists():
-            # StaticFiles mount only serves /ui/ (with trailing slash); requests
-            # to /ui (no slash) return 404. Add an explicit redirect so both work.
             @app.get("/ui", include_in_schema=False)
             def _ui_redirect() -> RedirectResponse:
                 return RedirectResponse(url="/ui/", status_code=307)
