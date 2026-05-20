@@ -1,3 +1,10 @@
+// CVE Spectral Search Engine — frontend app
+// All LEAF / Prompt Kaban strings replaced with CVE domain equivalents.
+// Spectral drift panel added.
+// Calls /api/drift/lambdas expecting:
+//   { period_a: { eigenvalues: number[], label: string },
+//     period_b: { eigenvalues: number[], label: string },
+//     drift_score: number }   (drift_score is optional)
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -316,207 +323,224 @@ async function renderSearchVisualizations(results) {
 // ─── AUDIT PANEL ────────────────────────────────────────────────────────────
 
 async function loadAuditPanel() {
-  const panel = $("#audit-panel-content");
-  if (!panel) return;
-  panel.innerHTML = `<div class="loading-screen"><div class="loader"></div><p>Loading audit data…</p></div>`;
+  const contentEl = $("#audit-content");
+  if (contentEl) {
+    contentEl.style.opacity = "0.4";
+    contentEl.style.pointerEvents = "none";
+  }
   try {
     const [stats, audit] = await Promise.all([
       api("/api/prompts/stats").catch(() => null),
       api("/api/prompts/audit").catch(() => null),
     ]);
-    renderAuditPanel(stats, audit);
     const lambdaData = await api("/api/prompts/lambdas").catch(() => null);
-    renderAuditLambdas(lambdaData, audit);
-    renderAuditCharts(lambdaData, audit);
+    _renderAuditHealth(stats, audit);
+    _renderAuditGraph(stats, audit);
+    _renderAuditStats(stats, audit);
+    _renderAuditLambdasKPI(lambdaData, audit);
+    _renderAuditManifold(lambdaData, audit);
+    _renderAuditSpectral(lambdaData, audit);
+    _renderAuditPCA(audit);
   } catch (e) {
-    panel.innerHTML = `<div class="error-screen"><h2>Audit failed</h2><p>${escapeHtml(e.message)}</p></div>`;
+    console.error("[audit]", e);
+    if (contentEl) {
+      contentEl.innerHTML = `<div class="error-screen"><h2>Audit failed</h2><p>${escapeHtml(e.message)}</p></div>`;
+    }
+  } finally {
+    if (contentEl) {
+      contentEl.style.opacity = "";
+      contentEl.style.pointerEvents = "";
+    }
   }
 }
 
-function renderAuditPanel(stats, audit) {
-  const kpiEl = $("#audit-kpis");
-  if (!kpiEl) return;
-  if (!stats && !audit) {
-    kpiEl.innerHTML = `<div class="signal-empty">No audit data available</div>`;
-    return;
-  }
-  const total = stats?.total_prompts ?? audit?.total ?? "—";
-  const dims = stats?.embedding_dim ?? audit?.dim ?? "—";
-  const backend = stats?.backend ?? audit?.backend ?? "arrowspace";
-  const indexed = stats?.indexed ?? audit?.indexed ?? "—";
-  kpiEl.innerHTML = `
-    <div class="audit-kpi-card"><h3>Total CVEs</h3><div class="audit-kpi-value">${total}</div></div>
-    <div class="audit-kpi-card"><h3>Embedding Dim</h3><div class="audit-kpi-value">${dims}</div></div>
-    <div class="audit-kpi-card"><h3>Backend</h3><div class="audit-kpi-value">${escapeHtml(String(backend))}</div></div>
-    <div class="audit-kpi-card"><h3>Indexed</h3><div class="audit-kpi-value">${indexed}</div></div>`;
-}
-
-function renderAuditLambdas(lambdaData, audit) {
-  const el = document.getElementById("audit-lambdas");
+function _renderAuditHealth(stats, audit) {
+  const el = $("#audit-health");
   if (!el) return;
-  const lambdas =
-    audit && Array.isArray(audit.eigenvalues) && audit.eigenvalues.length
-      ? audit.eigenvalues
-      : Array.isArray(lambdaData?.lambdas)
-      ? lambdaData.lambdas
-      : [];
-  if (!lambdas.length) {
-    el.innerHTML = `<div class="signal-empty">No eigenvalue data</div>`;
-    return;
-  }
-  const sorted = [...lambdas].map(Number).filter(Number.isFinite).sort((a, b) => b - a);
-  const top = sorted.slice(0, 8);
-  el.innerHTML = top
-    .map(
-      (v, i) => `
-    <div class="signal-row">
-      <span>λ<sub>${i + 1}</sub></span>
-      <strong>${v.toFixed(6)}</strong>
-    </div>`
-    )
-    .join("");
+  const status  = stats?.status  ?? audit?.status  ?? "ok";
+  const backend = stats?.backend ?? audit?.backend ?? "arrowspace";
+  const nitems  = stats?.total_prompts ?? audit?.total ?? stats?.nitems ?? "—";
+  const dim     = stats?.embedding_dim ?? audit?.dim ?? "—";
+  el.innerHTML = `
+    <div class="signal-card"><span class="signal-label">Status</span><strong class="ok-text">${escapeHtml(String(status))}</strong></div>
+    <div class="signal-card"><span class="signal-label">Backend</span><strong>${escapeHtml(String(backend))}</strong></div>
+    <div class="signal-card"><span class="signal-label">Items</span><strong>${nitems}</strong></div>
+    <div class="signal-card"><span class="signal-label">Embed Dim</span><strong>${dim}</strong></div>`;
 }
 
-function renderAuditCharts(lambdaData, audit) {
-  if (!window.Plotly) return;
-  const lambdas =
-    audit && Array.isArray(audit.eigenvalues) && audit.eigenvalues.length
-      ? audit.eigenvalues
-      : Array.isArray(lambdaData?.lambdas)
-      ? lambdaData.lambdas
-      : [];
-  _renderLambdaHistogram(lambdas);
-  _renderECDFPlot(lambdas);
-  _renderSpectralGapPlot(lambdas);
-  _renderManifoldComplexityPlot(lambdaData, audit);
+function _renderAuditGraph(stats, audit) {
+  const el = $("#audit-graph");
+  if (!el) return;
+  const graph     = audit?.graph_stats || {};
+  const nfeatures = stats?.embedding_dim ?? audit?.dim ?? graph.nfeatures ?? "—";
+  const nclusters = graph.nclusters ?? audit?.nclusters ?? "—";
+  const gl_nodes  = graph.gl_nodes  ?? audit?.gl_nodes  ?? "—";
+  const gl_shape  = Array.isArray(graph.gl_shape)
+    ? graph.gl_shape.join(" × ")
+    : (graph.gl_shape ?? "—");
+  el.innerHTML = `
+    <div class="signal-card"><span class="signal-label">Features</span><strong>${nfeatures}</strong></div>
+    <div class="signal-card"><span class="signal-label">Clusters</span><strong>${nclusters}</strong></div>
+    <div class="signal-card"><span class="signal-label">GL Nodes</span><strong>${gl_nodes}</strong></div>
+    <div class="signal-card"><span class="signal-label">GL Shape</span><strong>${escapeHtml(String(gl_shape))}</strong></div>`;
 }
 
-function _renderLambdaHistogram(lambdas) {
-  const el = document.getElementById("audit-lambda-hist");
-  if (!el || !lambdas.length) return;
-  const vals = lambdas.map(Number).filter(Number.isFinite);
-  Plotly.newPlot(
-    el,
-    [{ type: "histogram", x: vals, nbinsx: 50, marker: { color: "#4f98a3" } }],
-    {
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-      font: { color: "#ccc", size: 11 },
-      margin: { t: 10, b: 40, l: 40, r: 10 },
-      xaxis: { title: "λ value" },
-      yaxis: { title: "Count" },
-    },
-    { responsive: true, displayModeBar: false }
-  );
+function _renderAuditStats(stats, audit) {
+  const el = $("#audit-stats");
+  if (!el) return;
+  const deg   = audit?.degree_stats || {};
+  const graph = audit?.graph_stats  || {};
+  const mean  = deg.mean    != null ? Number(deg.mean).toFixed(4)    : "—";
+  const std   = deg.std     != null ? Number(deg.std).toFixed(4)     : "—";
+  const edges = graph.n_edges ?? "—";
+  const spar  = graph.sparsity != null ? Number(graph.sparsity).toFixed(6) : "—";
+  el.innerHTML = `
+    <div class="signal-card"><span class="signal-label">Degree Mean</span><strong>${mean}</strong></div>
+    <div class="signal-card"><span class="signal-label">Degree Std</span><strong>${std}</strong></div>
+    <div class="signal-card"><span class="signal-label">Edges</span><strong>${edges}</strong></div>
+    <div class="signal-card"><span class="signal-label">Sparsity</span><strong>${spar}</strong></div>`;
 }
 
-function _renderECDFPlot(lambdas) {
-  const el = document.getElementById("audit-ecdf");
-  if (!el || !lambdas.length) return;
-  const sorted = [...lambdas].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-  const n = sorted.length;
-  const y = sorted.map((_, i) => (i + 1) / n);
-  Plotly.newPlot(
-    el,
-    [{ type: "scatter", x: sorted, y, mode: "lines", line: { color: "#4f98a3", width: 2 } }],
-    {
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-      font: { color: "#ccc", size: 11 },
-      margin: { t: 10, b: 40, l: 40, r: 10 },
-      xaxis: { title: "λ" },
-      yaxis: { title: "ECDF", range: [0, 1] },
-    },
-    { responsive: true, displayModeBar: false }
-  );
+function _renderAuditLambdasKPI(lambdaData, audit) {
+  const el = $("#audit-lambdas");
+  if (!el) return;
+  const spectral  = audit?.spectral_stats || {};
+  const lambdas   = _resolveAuditLambdas(lambdaData, audit);
+  const readNum   = (...vs) => { for (const v of vs) { const n = Number(v); if (Number.isFinite(n)) return n; } return null; };
+  const fiedler   = readNum(spectral.fiedler_value, spectral.fiedlerValue, spectral.fiedler, spectral.lambda2);
+  const gap       = readNum(spectral.spectral_gap, spectral.spectralGap, spectral.gap);
+  const fmt       = v => v === null ? "—" : v.toFixed(6);
+  const fColor    = fiedler === null       ? "var(--color-text-muted)"
+                  : fiedler > 0.01         ? "#34d399"
+                  : fiedler > 0.001        ? "#facc15"
+                  :                          "#f87171";
+  el.innerHTML = `
+    <div class="signal-card"><span class="signal-label">Fiedler λ₂</span><strong style="color:${fColor}">${fmt(fiedler)}</strong></div>
+    <div class="signal-card"><span class="signal-label">Spectral Gap</span><strong>${fmt(gap)}</strong></div>
+    <div class="signal-card"><span class="signal-label">λ Samples</span><strong>${lambdas.length || "—"}</strong></div>
+    <div class="signal-card"><span class="signal-label">Source</span><strong>${escapeHtml(lambdaData ? "/api/prompts/lambdas" : "audit")}</strong></div>`;
 }
 
-function _renderSpectralGapPlot(lambdas) {
-  const el = document.getElementById("audit-gap");
-  if (!el || !lambdas.length) return;
-  const sorted = [...lambdas].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-  const gaps = sorted.slice(1).map((v, i) => v - sorted[i]);
-  Plotly.newPlot(
-    el,
-    [{ type: "bar", x: gaps.map((_, i) => i + 1), y: gaps, marker: { color: "#fdab43" } }],
-    {
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-      font: { color: "#ccc", size: 11 },
-      margin: { t: 10, b: 40, l: 40, r: 10 },
-      xaxis: { title: "Gap index" },
-      yaxis: { title: "Δλ" },
-    },
-    { responsive: true, displayModeBar: false }
-  );
+function _resolveAuditLambdas(lambdaData, audit) {
+  if (audit && Array.isArray(audit.eigenvalues) && audit.eigenvalues.length)
+    return audit.eigenvalues.map(Number).filter(Number.isFinite);
+  if (Array.isArray(lambdaData?.lambdas) && lambdaData.lambdas.length)
+    return lambdaData.lambdas.map(Number).filter(Number.isFinite);
+  return [];
 }
 
-function _renderManifoldComplexityPlot(lambdaData, audit) {
-  const el = document.getElementById("audit-manifold");
+function _renderAuditManifold(lambdaData, audit) {
+  const el = document.getElementById("audit-query-manifold");
   if (!el || !window.Plotly) return;
-  const lambdas =
-    audit && Array.isArray(audit.eigenvalues) && audit.eigenvalues.length
-      ? { lambdas: audit.eigenvalues, n: audit.eigenvalues.length }
-      : lambdaData;
-  if (!lambdas) {
-    el.innerHTML = `<div class="manifold-empty-msg">No manifold data available.</div>`;
-    return;
-  }
-  renderManifoldComplexityPlot(el, lambdas);
-}
-
-function renderManifoldComplexityPlot(el, data) {
-  if (!el || !data?.lambdas || !window.Plotly) return;
-  const lambdas = data.lambdas.map(Number).filter(Number.isFinite);
+  const lambdas = _resolveAuditLambdas(lambdaData, audit);
   if (!lambdas.length) {
-    el.innerHTML = `<div class="manifold-empty-msg">No eigenvalue data for manifold plot.</div>`;
+    el.innerHTML = `<div class="signal-empty" style="padding:2rem;color:#9aa6bd">No eigenvalue data for manifold plot.</div>`;
     return;
   }
   const sorted = [...lambdas].sort((a, b) => a - b);
   const n = sorted.length;
-  const cumsumTotal = sorted.reduce((acc, v) => acc + v, 0);
-  let cumsum = 0;
-  const spectralEnergy = sorted.map((v) => {
-    cumsum += v;
-    return cumsumTotal > 0 ? cumsum / cumsumTotal : 0;
-  });
+  const total = sorted.reduce((s, v) => s + v, 0);
+  let cum = 0;
+  const spectralEnergy = sorted.map(v => { cum += v; return total > 0 ? cum / total : 0; });
   const thresholds = [0.5, 0.8, 0.95];
-  const shapes = thresholds.map((t) => {
-    const idx = spectralEnergy.findIndex((e) => e >= t);
-    return {
-      type: "line",
-      x0: idx,
-      x1: idx,
-      y0: 0,
-      y1: 1,
-      line: { color: "rgba(253,171,67,0.6)", width: 1, dash: "dot" },
-    };
+  const shapes = thresholds.map(t => {
+    const idx = spectralEnergy.findIndex(e => e >= t);
+    return { type: "line", x0: idx, x1: idx, y0: 0, y1: 1,
+             line: { color: "rgba(253,171,67,0.7)", width: 1, dash: "dot" } };
   });
-  Plotly.newPlot(
-    el,
-    [
-      {
-        type: "scatter",
-        x: Array.from({ length: n }, (_, i) => i),
-        y: spectralEnergy,
-        mode: "lines",
-        fill: "tozeroy",
-        line: { color: "#4f98a3", width: 2 },
-        fillcolor: "rgba(79,152,163,0.15)",
-        name: "Cumulative spectral energy",
-      },
-    ],
-    {
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-      font: { color: "#ccc", size: 11 },
-      margin: { t: 10, b: 40, l: 40, r: 10 },
-      xaxis: { title: "Eigenvalue index" },
-      yaxis: { title: "Cumulative energy", range: [0, 1] },
-      shapes,
-    },
-    { responsive: true, displayModeBar: false }
-  );
+  const annotations = thresholds.map(t => {
+    const idx = spectralEnergy.findIndex(e => e >= t);
+    return { x: idx, y: t, text: `${t * 100}%`, showarrow: false,
+             font: { color: "#fdab43", size: 10 }, xanchor: "left", yanchor: "bottom" };
+  });
+  Plotly.newPlot(el, [{
+    type: "scatter",
+    x: Array.from({ length: n }, (_, i) => i),
+    y: spectralEnergy,
+    mode: "lines",
+    fill: "tozeroy",
+    line: { color: "#4f98a3", width: 2 },
+    fillcolor: "rgba(79,152,163,0.12)",
+    name: "Cumulative spectral energy",
+  }], {
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: { color: "#ccc", size: 11 },
+    margin: { t: 16, b: 40, l: 44, r: 16 },
+    xaxis: { title: "Eigenvalue index", gridcolor: "rgba(255,255,255,0.06)" },
+    yaxis: { title: "Cumulative energy", range: [0, 1.02], gridcolor: "rgba(255,255,255,0.06)" },
+    shapes, annotations,
+  }, { responsive: true, displayModeBar: false });
+}
+
+function _renderAuditSpectral(lambdaData, audit) {
+  const el = document.getElementById("audit-spectral-fingerprint");
+  if (!el || !window.Plotly) return;
+  const lambdas = _resolveAuditLambdas(lambdaData, audit);
+  if (!lambdas.length) {
+    el.innerHTML = `<div class="signal-empty" style="padding:2rem;color:#9aa6bd">No eigenvalue data for spectral fingerprint.</div>`;
+    return;
+  }
+  const sorted = [...lambdas].sort((a, b) => a - b);
+  const n = sorted.length;
+  const p25 = sorted[Math.floor(n * 0.25)];
+  const med = sorted[Math.floor(n * 0.50)];
+  const p75 = sorted[Math.floor(n * 0.75)];
+  const shapes = [
+    { type: "line", x0: p25, x1: p25, y0: 0, y1: 1, yref: "paper", line: { color: "rgba(253,171,67,0.5)", width: 1, dash: "dot" } },
+    { type: "line", x0: med, x1: med, y0: 0, y1: 1, yref: "paper", line: { color: "rgba(79,152,163,0.9)", width: 1, dash: "dot" } },
+    { type: "line", x0: p75, x1: p75, y0: 0, y1: 1, yref: "paper", line: { color: "rgba(253,171,67,0.5)", width: 1, dash: "dot" } },
+  ];
+  const annotations = [
+    { x: p25, y: 0.95, yref: "paper", text: "p25", showarrow: false, font: { color: "#fdab43", size: 9 } },
+    { x: med, y: 0.95, yref: "paper", text: "median", showarrow: false, font: { color: "#4f98a3", size: 9 } },
+    { x: p75, y: 0.95, yref: "paper", text: "p75", showarrow: false, font: { color: "#fdab43", size: 9 } },
+  ];
+  const ecdfY = sorted.map((_, i) => (i + 1) / n);
+  Plotly.newPlot(el, [
+    { type: "histogram", x: lambdas, nbinsx: 60,
+      marker: { color: "rgba(79,152,163,0.7)" }, name: "λ histogram", yaxis: "y" },
+    { type: "scatter", x: sorted, y: ecdfY, mode: "lines",
+      line: { color: "#fdab43", width: 2 }, name: "ECDF", yaxis: "y2" },
+  ], {
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: { color: "#ccc", size: 11 },
+    margin: { t: 16, b: 40, l: 44, r: 50 },
+    xaxis: { title: "λ value", gridcolor: "rgba(255,255,255,0.06)" },
+    yaxis: { title: "Count", gridcolor: "rgba(255,255,255,0.06)" },
+    yaxis2: { title: "ECDF", overlaying: "y", side: "right", range: [0, 1.02], showgrid: false },
+    legend: { x: 0.01, y: 0.99, bgcolor: "rgba(0,0,0,0.3)", font: { size: 10 } },
+    shapes, annotations,
+  }, { responsive: true, displayModeBar: false });
+}
+
+function _renderAuditPCA(audit) {
+  const canvas = document.getElementById("audit-pca");
+  if (!canvas) return;
+  const points = audit?.pca_2d || [];
+  const ctx = canvas.getContext("2d");
+  const W = canvas.offsetWidth || 900;
+  const H = 260;
+  canvas.width = W;
+  canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+  if (!points.length) {
+    ctx.fillStyle = "rgba(154,166,189,0.7)";
+    ctx.font = "13px Inter, sans-serif";
+    ctx.fillText("No PCA data returned by /api/prompts/audit", 20, H / 2);
+    return;
+  }
+  const xs = points.map(p => p[0]);
+  const ys = points.map(p => p[1]);
+  const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const pad = 20;
+  points.forEach(p => {
+    const x = pad + ((p[0] - minX) / (maxX - minX || 1)) * (W - pad * 2);
+    const y = H - pad - ((p[1] - minY) / (maxY - minY || 1)) * (H - pad * 2);
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(124,92,255,0.8)";
+    ctx.fill();
+  });
 }
 
 // ─── SPECTRAL DRIFT PANEL ───────────────────────────────────────────────────
@@ -939,10 +963,8 @@ function _invalidateVizCache() {
 function resizeKnownPlots() {
   const plotIds = [
     "search-viz",
-    "audit-lambda-hist",
-    "audit-ecdf",
-    "audit-gap",
-    "audit-manifold",
+    "audit-query-manifold",
+    "audit-spectral-fingerprint",
     "drift-view-lambda-overlay",
     "drift-view-ecdf",
     "drift-view-pca",
@@ -1124,6 +1146,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#prompt-modal")?.addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeModal();
   });
+
+  // Audit panel refresh button
+  $("#refresh-audit-btn")?.addEventListener("click", () => loadAuditPanel());
 
   // Drift panel refresh button
   $("#run-drift-btn")?.addEventListener("click", async () => {
