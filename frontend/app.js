@@ -1,9 +1,5 @@
-git <<<<<<< HEAD
-// CVE ArrowSpace frontend — adapted from LEAF Prompt Kaban
-// No build step. Hits /api/* directly.
-=======
-// CVE Spectral Search Engine — frontend app
-// All LEAF / Prompt Kaban strings replaced with CVE domain equivalents.
+
+// CVE Spectral Search Engine — frontend app// All LEAF / Prompt Kaban strings replaced with CVE domain equivalents.
 // Spectral drift panel added: overlaid eigenvalue histograms for
 //   Period A: cve_99_14.zarr  (1999–2014)
 //   Period B: cve_99_25.zarr  (1999–2025)
@@ -11,7 +7,7 @@ git <<<<<<< HEAD
 //   { period_a: { eigenvalues: number[], label: string },
 //     period_b: { eigenvalues: number[], label: string },
 //     drift_score: number }   (drift_score is optional)
->>>>>>> 46cdc4503274ab476a579ab354e4b75652dc7c44
+
 
 const $ = (sel) => document.querySelector(sel);
 
