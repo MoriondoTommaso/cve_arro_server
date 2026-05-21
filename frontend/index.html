@@ -38,7 +38,6 @@
 
     <main class="leaf-layout">
 
-      <!-- SEARCH VIEW -->
       <section id="search-view" class="view">
         <aside class="sidebar">
           <div class="sidebar-header">
@@ -63,14 +62,6 @@
             </div>
             <input id="alpha-slider" type="range" min="0" max="1" step="0.01" value="0.6" />
             <p><strong>0 = pure spectral</strong> (graph Laplacian) · <strong>1 = pure cosine</strong> similarity.</p>
-          </div>
-          <div class="spectral-control">
-            <div class="spectral-label-row">
-              <label for="salience-slider">Metadata Salience</label>
-              <span id="salience-value">0.30</span>
-            </div>
-            <input id="salience-slider" type="range" min="0" max="1" step="0.01" value="0.3" />
-            <p>Metadata reranking weight. <strong>0 disables</strong> salience, <strong>1 = full influence</strong>.</p>
           </div>
           <div class="spectral-control">
             <div class="spectral-label-row">
@@ -135,7 +126,6 @@
         </section>
       </section>
 
-      <!-- AUDIT VIEW -->
       <section id="audit-view" class="view hidden">
         <section class="content audit-content">
           <header class="content-header">
@@ -173,7 +163,6 @@
         </section>
       </section>
 
-      <!-- SPECTRAL DRIFT VIEW -->
       <section id="drift-view" class="view hidden">
         <section class="content audit-content">
           <header class="content-header">
@@ -233,7 +222,6 @@
 
     </main>
 
-    <!-- Prompt detail modal -->
     <div id="prompt-modal" class="prompt-modal hidden" role="dialog" aria-modal="true">
       <div class="prompt-modal-content">
         <button id="prompt-modal-close" class="prompt-modal-close" type="button" aria-label="Close">&times;</button>
